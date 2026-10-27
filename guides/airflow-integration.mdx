@@ -1,0 +1,167 @@
+---
+title: "Generating and Scheduling Airflow DAGs with DBImport"
+sidebarTitle: "Airflow"
+description: "Auto-generate Airflow DAGs from DBImport table definitions — covering task layout, custom tasks, timezone handling, and multi-cluster sensors."
+---
+
+DBImport integrates deeply with Apache Airflow to automate the scheduling and orchestration of data ingestion pipelines. Rather than manually building DAGs for every table, DBImport generates them automatically from the import configuration — scaling to environments with tens of thousands of tables running daily imports with minimal operator intervention.
+
+## Generating a DAG
+
+The DAG generation command reads the `airflow_import_dags` table and produces a full DAG file for the specified DAG name. Running it without the write flag places the output in the staging directory (`airflow_dag_staging_directory`) so you can inspect it before activating it:
+
+```bash
+./manage --airflowGenerate --airflowDAG=<DAG NAME>
+```
+
+Once you have verified the output, append `--airflowWriteDAG` (or `-w`) to write the file directly to Airflow's DAG directory:
+
+```bash
+./manage --airflowGenerate --airflowDAG=<DAG NAME> --airflowWriteDAG
+```
+
+The newly written DAG appears in Airflow in **paused** mode and can be reviewed and un-paused from the Airflow UI.
+
+<Note>
+  The `airflow_major_version` configuration key controls the generated DAG file
+  format. Set it to `1` for Airflow 1.x and `2` for Airflow 2.x.
+</Note>
+
+## Default DAG Layout
+
+A standard DBImport DAG — one with no special flags set — follows a linear flow from left to right.
+
+<Steps>
+  <Step title="start">
+    Runs `./manage --checkAirflowExecution`. If the `airflow_disable` configuration is set to `1`, this task fails immediately and the rest of the DAG does not run. This is the primary mechanism for operators to pause all DBImport executions during maintenance windows.
+  </Step>
+  <Step title="clearStage (full imports only)">
+    Resets the stage tracker for each full-import table so the task always starts from scratch. Incremental imports do **not** get a `clearStage` task — restarting mid-stage on an incremental import risks data loss.
+  </Step>
+  <Step title="Import tasks">
+    One Airflow task per configured table. Each task runs the Sqoop or Spark ingestion followed by the Hive ETL phase.
+  </Step>
+  <Step title="stop">
+    A dummy task that does nothing. Its sole purpose is to serve as a reliable anchor point for inter-DAG sensors: because `stop` is always the last task in every DBImport DAG, other DAGs can safely wait on it.
+  </Step>
+</Steps>
+
+## Splitting Import and ETL into Separate Task Pools
+
+Set `run_import_and_etl_separate = 1` in the `airflow_import_dags` table, then regenerate the DAG. Each table's single combined task is split into two:
+
+- **Import task** — handles source-system communication (Sqoop or Spark)
+- **ETL task** — handles all Hive operations
+
+Because these two groups run in separate Airflow pools, you can allow more parallelism in Hive while keeping the number of concurrent source-system sessions low.
+
+## Finishing All Imports Before ETL Begins
+
+Set `finish_all_stage1_first = 1` in the `airflow_import_dags` table, then regenerate the DAG. A barrier task called `Import_Phase_Finished` is inserted between the import tasks and the ETL tasks. All import tasks must complete successfully before any ETL task starts.
+
+<Note>
+  The column name `finish_all_stage1_first` is a historical artefact from the
+  Legacy version of DBImport, where the import and ETL phases were called
+  Stage 1 and Stage 2. The name will change when the Legacy version is
+  decommissioned.
+</Note>
+
+## Timezone Configuration
+
+Airflow uses the configured timezone together with the `schedule_interval` to determine exact execution times. DBImport manages timezone at two levels:
+
+<AccordionGroup>
+  <Accordion title="Global default timezone">
+    The `timezone` key in the `configuration` table provides the default for all DAGs. It defaults to `UTC`. If the Airflow server itself runs at UTC (the common case), setting this to `UTC` means no conversions are applied.
+  </Accordion>
+  <Accordion title="Per-DAG timezone override">
+    Every DAG configuration table (`airflow_import_dags` and equivalents) has a `timezone` column. Set it to a valid timezone string (e.g., `America/New_York`) to override the global default for that DAG. Set it to `null` if no override is needed.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Specifying a non-UTC timezone automatically handles daylight-saving time
+  transitions for that timezone.
+</Tip>
+
+## Customizing the DAG with Additional Tasks
+
+DBImport lets you inject custom tasks anywhere in the generated DAG by adding rows to the `airflow_tasks` table. Custom tasks are useful for pre-import validation, post-import notifications, cross-system triggers, and more.
+
+### Task Placement
+
+<CardGroup cols={3}>
+  <Card title="before main" icon="arrow-left">
+    Tasks run before any import starts. All must succeed for the regular import tasks to proceed.
+  </Card>
+  <Card title="in main" icon="arrows-left-right">
+    Tasks run in parallel alongside the import tasks. Optionally chained to complete only after specific imports finish.
+  </Card>
+  <Card title="after main" icon="arrow-right">
+    Tasks run after all imports and ETL are complete.
+  </Card>
+</CardGroup>
+
+**Task dependency within `in main`**
+
+For tasks placed `in main`, the `task_dependency_in_main` column accepts a comma-separated list of import task names. The custom task will only start after all listed import tasks have completed successfully. Leaving the column empty means the task runs immediately in parallel with all other imports.
+
+### Task Types
+
+<Tabs>
+  <Tab title="Shell Script">
+    Runs any Unix command or shell script. The command or script path is stored in the `task_config` column.
+  </Tab>
+  <Tab title="Hive SQL">
+    Executes a single Hive SQL statement via `./manage --runHiveQuery=<SQL QUERY>`. The query is stored in `task_config`.
+  </Tab>
+  <Tab title="Hive SQL Script">
+    Executes all statements in a SQL file via `./manage --runHiveScript=<FILE>` (a wrapper around `beeline`). The file path is stored in `task_config`.
+  </Tab>
+  <Tab title="JDBC SQL">
+    Executes a SQL query against a JDBC source defined in the `jdbc_connections` table. Requires both `jdbc_dbalias` (the connection name) and `task_config` (the SQL query).
+  </Tab>
+  <Tab title="Trigger DAG">
+    Triggers another Airflow DAG. The target DAG name is stored in `task_config`.
+  </Tab>
+  <Tab title="DAG Sensor">
+    Waits for a task in another DAG to finish. `task_config` accepts either `<DAG>` (defaults to waiting on that DAG's `stop` task) or `<DAG>.<TASK>` to wait on a specific task.
+
+    | Parameter | Description |
+    |---|---|
+    | `sensor_poke_interval` | Seconds between poll attempts. Defaults to 5 minutes. Keep this value reasonable to avoid overloading the Airflow Scheduler. |
+    | `sensor_timeout_minutes` | Minutes before the sensor gives up and marks the task failed. Defaults to 4 hours. |
+  </Tab>
+  <Tab title="SQL Sensor">
+    Polls an Airflow connection with a SQL query. The sensor retries as long as the query returns zero rows — or a `0` in the first column of the first row. Use it to wait for upstream data to arrive before importing.
+
+    | Parameter | Description |
+    |---|---|
+    | `sensor_connection` | Airflow connection name (configured under Admin → Connections). |
+    | `task_config` | The SQL query to execute. |
+    | `sensor_poke_interval` | Seconds between poll attempts. Defaults to 5 minutes. |
+    | `sensor_timeout_minutes` | Minutes before the sensor times out. Defaults to 4 hours. |
+  </Tab>
+</Tabs>
+
+### Common Task Configuration Columns
+
+| Column | Description |
+|---|---|
+| `airflow_pool` | Airflow pool to use. Created automatically if it does not exist. |
+| `airflow_priority` | Task priority weight. |
+| `include_in_airflow` | Set to `0` to exclude this task from the DAG without deleting the row. |
+
+## Multi-Cluster SQL Sensor
+
+When DBImport is configured for multi-cluster ingestion, the remote cluster's DAG automatically includes a SQL Sensor task. The sensor uses an Airflow connection named **DBImport** (configured with the same details as in `dbimport.cfg`) to poll the DBImport configuration database. The import on the remote cluster only starts once fresh data has been copied to HDFS:
+
+```sql
+select count(*) from import_tables
+where
+   hive_db = '<HIVE DB>'
+   and hive_table = '<HIVE TABLE>'
+   and copy_finished >= '{{ next_execution_date.strftime('%Y-%m-%d %H:%M:%S.%f') }}'
+```
+
+The sensor returns a non-zero count — and the dependent import tasks proceed — only after `copy_finished` has been updated to a timestamp at or after the DAG's `next_execution_date`.

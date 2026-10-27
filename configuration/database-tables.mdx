@@ -1,0 +1,421 @@
+---
+title: "DBImport Configuration Database Tables Reference"
+sidebarTitle: "Database Tables"
+description: "Detailed reference for every DBImport MySQL configuration table covering Airflow DAGs, import and export definitions, instances, ETL jobs, statistics, and Atlas caches."
+---
+
+DBImport stores all operational configuration in a MySQL database. Because the web administration UI is not yet available, every configuration change must be made directly in these tables using a MySQL client such as [HeidiSQL](https://www.heidisql.com/). This page describes the purpose and key columns of each table.
+
+<Note>
+Columns marked **do not change manually** are managed by DBImport automatically. Editing them may corrupt operational state and cause imports or exports to fail.
+</Note>
+
+---
+
+## Airflow DAG Tables
+
+DBImport generates Apache Airflow DAG files based on the rows in these tables. The `./manage` command regenerates DAG files whenever `auto_regenerate_dag` is set to `1`.
+
+### `airflow_import_dags`
+
+Defines Airflow DAGs that orchestrate import operations. Each row describes one DAG along with the filter that controls which `import_tables` rows are included.
+
+<Accordion title="Column reference">
+
+| Column | Description |
+|---|---|
+| `dag_name` | Unique name of the Airflow DAG |
+| `schedule_interval` | Cron expression or preset (e.g. `@daily`) controlling when the DAG runs |
+| `filter_hive` | Semicolon-separated list of `HIVE_DB.HIVE_TABLE` patterns. Wildcards (`*`) are supported. Example: `dwh.orders;dwh.customers*` |
+| `finish_all_stage1_first` | `1` = complete all import-phase (stage 1) tasks before any ETL-phase (stage 2) task starts |
+| `run_import_and_etl_separate` | `1` = run the import phase and ETL phase as separate Airflow tasks |
+| `retries` | Default retry count for all tasks in the DAG |
+| `retries_stage1` | Retry count override specifically for import-phase tasks |
+| `retries_stage2` | Retry count override specifically for ETL-phase tasks |
+| `pool_stage1` | Airflow pool for stage 1 tasks. `NULL` uses the default hostname pool |
+| `pool_stage2` | Airflow pool for stage 2 tasks. `NULL` uses the default DAG pool |
+| `auto_regenerate_dag` | `1` = DBImport regenerates the DAG file automatically when the manage command runs |
+| `sudo_user` | All tasks in the DAG will sudo to this user instead of the global default |
+| `timezone` | IANA timezone for interpreting `schedule_interval` (e.g. `Europe/Stockholm`) |
+| `email` | Comma-separated email addresses for failure/retry notifications |
+| `email_on_failure` | `1` = send an email when any task in the DAG fails |
+| `email_on_retries` | `1` = send an email on task retry |
+| `concurrency` | Maximum number of concurrently running tasks within this DAG |
+| `sla_warning_time` | Maximum expected DAG runtime; Airflow triggers an SLA miss alert if exceeded |
+| `retry_exponential_backoff` | `1` = use exponential back-off between retries; `0` = fixed 5-minute interval |
+| `metadata_import` | `1` = run only `getSchema` and `getRowCount` instead of a full import |
+| `airflow_notes` | Markdown text displayed inside the Airflow UI for this DAG |
+| `operator_notes` | Internal free-text notes for operators |
+| `application_notes` | Free-text field for application documentation or links |
+| `tags` | Comma-separated Airflow tag names applied to the generated DAG |
+
+</Accordion>
+
+---
+
+### `airflow_export_dags`
+
+Defines Airflow DAGs that orchestrate export operations. Structure mirrors `airflow_import_dags` but filters on `export_tables` columns instead of Hive tables.
+
+<Accordion title="Column reference">
+
+| Column | Description |
+|---|---|
+| `dag_name` | Unique name of the Airflow DAG |
+| `schedule_interval` | Cron expression controlling when the DAG runs |
+| `filter_dbalias` | Filter pattern matched against the `dbalias` column in `export_tables`. Wildcards supported |
+| `filter_target_schema` | Filter pattern matched against `target_schema` in `export_tables` |
+| `filter_target_table` | Filter pattern matched against `target_table` in `export_tables` |
+| `trigger_dag_on_success` | Comma-separated list of DAG names to trigger if this export DAG completes successfully |
+| `retries` | Retry count for tasks in this DAG |
+| `auto_regenerate_dag` | `1` = regenerate the DAG file automatically |
+| `sudo_user` | All tasks sudo to this user |
+| `timezone` | IANA timezone for `schedule_interval` |
+| `email` | Comma-separated notification email addresses |
+| `email_on_failure` | `1` = notify on failure |
+| `email_on_retries` | `1` = notify on retry |
+| `concurrency` | Maximum concurrent tasks |
+| `sla_warning_time` | SLA miss threshold |
+| `retry_exponential_backoff` | `1` = exponential back-off; `0` = fixed 5-minute retry interval |
+| `airflow_notes` | Markdown notes shown in the Airflow UI |
+| `operator_notes` | Internal operator notes |
+| `application_notes` | Application documentation or links |
+| `tags` | Airflow tags for the generated DAG |
+
+</Accordion>
+
+---
+
+### `airflow_custom_dags`
+
+Holds DAGs that contain no import, export, or ETL definitions — only custom tasks from `airflow_tasks`. Useful for post-import Hive transformations or other custom automation that needs its own schedule. At least one task with `placement = in main` must exist in `airflow_tasks` for the DAG to generate.
+
+<Accordion title="Column reference">
+
+| Column | Description |
+|---|---|
+| `dag_name` | Unique name of the Airflow DAG |
+| `schedule_interval` | Cron expression controlling when the DAG runs |
+| `retries` | Retry count for tasks |
+| `auto_regenerate_dag` | `1` = regenerate the DAG file automatically |
+| `sudo_user` | All tasks sudo to this user |
+| `timezone` | IANA timezone for `schedule_interval` |
+| `email` | Comma-separated notification addresses |
+| `email_on_failure` | `1` = notify on failure |
+| `email_on_retries` | `1` = notify on retry |
+| `concurrency` | Maximum concurrent tasks |
+| `sla_warning_time` | SLA miss threshold |
+| `retry_exponential_backoff` | `1` = exponential back-off |
+| `airflow_notes` | Markdown notes in the Airflow UI |
+| `operator_notes` | Internal operator notes |
+| `application_notes` | Application documentation or links |
+| `tags` | Airflow tags |
+
+</Accordion>
+
+---
+
+### `airflow_etl_dags`
+
+Defines Airflow DAGs that run ETL jobs only, with no import or export operations. Filters target the `etl_jobs` table.
+
+<Accordion title="Column reference">
+
+| Column | Description |
+|---|---|
+| `dag_name` | Unique name of the Airflow DAG |
+| `schedule_interval` | Cron expression |
+| `filter_job` | Filter pattern matched against the `job` column in `etl_jobs` |
+| `filter_task` | Filter pattern matched against the `task` column in `etl_jobs` |
+| `filter_source_db` | Filter pattern matched against `source_db` in `etl_jobs` |
+| `filter_target_db` | Filter pattern matched against `target_db` in `etl_jobs` |
+| `retries` | Retry count |
+| `auto_regenerate_dag` | `1` = auto-regenerate |
+| `sudo_user` | Sudo user override |
+| `timezone` | IANA timezone |
+| `email` | Notification addresses |
+| `email_on_failure` | `1` = notify on failure |
+| `email_on_retries` | `1` = notify on retry |
+| `concurrency` | Max concurrent tasks |
+| `sla_warning_time` | SLA miss threshold |
+| `retry_exponential_backoff` | `1` = exponential back-off |
+| `airflow_notes` | Markdown notes in Airflow UI |
+| `operator_notes` | Internal operator notes |
+| `application_notes` | Application documentation |
+| `tags` | Airflow tags |
+
+</Accordion>
+
+---
+
+### `airflow_tasks`
+
+Custom tasks that are injected into any DAG type. Tasks are organized into three **placement** zones relative to the main import/export/ETL work:
+
+| Placement | Position in DAG |
+|---|---|
+| `before main` | Runs before any import, export, or ETL task |
+| `in main` | Runs alongside import/export/ETL tasks (required for custom DAGs) |
+| `after main` | Runs after all import, export, or ETL tasks complete |
+
+Supported task types:
+
+<CardGroup cols={2}>
+  <Card title="Shell Script" icon="terminal">
+    Executes a shell command or script on the Airflow worker
+  </Card>
+  <Card title="Hive SQL" icon="database">
+    Runs an inline HiveQL statement
+  </Card>
+  <Card title="Hive SQL Script" icon="file-code">
+    Runs a HiveQL script file
+  </Card>
+  <Card title="JDBC SQL" icon="plug">
+    Executes SQL directly against a JDBC connection alias
+  </Card>
+  <Card title="Trigger DAG" icon="play">
+    Triggers another Airflow DAG
+  </Card>
+  <Card title="DAG Sensor" icon="radar">
+    Waits for another DAG to complete
+  </Card>
+  <Card title="SQL Sensor" icon="magnifying-glass">
+    Polls a SQL query until it returns a result
+  </Card>
+</CardGroup>
+
+<Accordion title="Column reference">
+
+| Column | Description |
+|---|---|
+| `dag_name` | Name of the DAG this task belongs to |
+| `task_name` | Airflow task name |
+| `task_type` | Task type (see list above) |
+| `placement` | `before main`, `in main`, or `after main` |
+| `jdbc_dbalias` | Connection alias used by `JDBC SQL` tasks |
+| `airflow_pool` | Airflow pool for this task |
+| `airflow_priority` | Airflow `priority_weight` — higher values run first |
+| `include_in_airflow` | `1` = include the task in the generated DAG; `0` = exclude it |
+| `task_dependency_upstream` | Comma-separated task names this task depends on (upstream) |
+| `task_dependency_downstream` | Comma-separated task names that depend on this task (downstream) |
+| `task_config` | Task-type-specific configuration (SQL text, script path, DAG name, etc.) |
+| `sensor_connection` | Airflow connection name used by sensor tasks |
+| `sensor_poke_interval` | Polling interval in seconds for sensor tasks |
+| `sensor_timeout_minutes` | Maximum wait time in minutes before the sensor fails |
+| `sensor_soft_fail` | `1` = mark sensor task as skipped instead of failed on timeout |
+| `sudo_user` | Task-level sudo user override |
+
+</Accordion>
+
+---
+
+## Import and Export Tables
+
+### `import_tables`
+
+The primary configuration table for all import operations. Each row defines one source-to-Hive table mapping.
+
+<Accordion title="Key columns">
+
+| Column | Description |
+|---|---|
+| `hive_db` | Target Hive database name |
+| `hive_table` | Target Hive table name |
+| `table_id` | Auto-incremented unique identifier |
+| `dbalias` | Connection alias from `jdbc_connections` |
+| `source_schema` | Schema name in the remote database |
+| `source_table` | Table or view name in the remote database |
+| `import_phase_type` | Import phase method (e.g. `full`, `incr`, `oracle_flashback`) |
+| `etl_phase_type` | ETL phase method (e.g. `truncate_insert`, `merge`, `merge_history_audit`) |
+| `import_tool` | Ingestion engine: `sqoop` or `spark` |
+| `mappers` | `-1` = auto-calculated based on prior run size; positive integer = fixed mapper count |
+| `spark_executors` | Executor count override for Spark imports |
+| `include_in_airflow` | `1` = include this table in matching Airflow DAGs |
+| `airflow_priority` | Airflow `priority_weight` for this table's task |
+| `validate_import` | `0` = no validation; `1` = validate after import |
+| `validationMethod` | `rowCount` or `customQuery` |
+| `validate_source` | `query` = run `SELECT COUNT(*)` on source; `sqoop` = use Sqoop/Spark row count |
+| `validate_diff_allowed` | `-1` = auto-calculated tolerance; positive integer = fixed maximum row count difference |
+| `validationCustomQuerySourceSQL` | Custom SQL executed against the source database for validation |
+| `validationCustomQueryHiveSQL` | Custom SQL executed against Hive for validation |
+| `validationCustomQueryValidateImportTable` | `0` = skip validation on the import table (useful for incremental imports) |
+| `incr_column` | Column used to identify new rows in incremental imports |
+| `incr_validation_method` | `full` = validate all rows; `incr` = validate only the incrementally loaded rows |
+| `incr_minvalue` / `incr_maxvalue` | Incremental import watermarks — **do not change manually** |
+| `pk_column_override` | Comma-separated list of columns to use as the primary key instead of the source PK |
+| `split_by_column` | Column used to split data across parallel sessions |
+| `sqoop_sql_where_addition` | SQL fragment appended after `WHERE` in the Sqoop/Spark query |
+| `soft_delete_during_merge` | `1` = mark deleted rows as deleted instead of physically removing them during merge |
+| `force_string` | `1` = convert all character columns to Hive `STRING` |
+| `copy_slave` | `1` = this table participates in the cross-cluster copy phase |
+
+</Accordion>
+
+---
+
+### `export_tables`
+
+The primary configuration table for all export operations. Each row maps a Hive table to a remote target.
+
+<Accordion title="Key columns">
+
+| Column | Description |
+|---|---|
+| `dbalias` | Target connection alias from `jdbc_connections` |
+| `target_schema` | Schema on the target database (or the path segment for S3) |
+| `target_table` | Table on the target database (or the S3 folder name) |
+| `table_id` | Auto-incremented unique identifier |
+| `hive_db` | Source Hive database |
+| `hive_table` | Source Hive table |
+| `export_type` | `full` or `incr` |
+| `export_tool` | Ingestion engine: `sqoop` or `spark` |
+| `mappers` | `-1` = auto-calculated; positive integer = fixed mapper count |
+| `include_in_airflow` | `1` = include this table in matching Airflow DAGs |
+| `airflow_priority` | Airflow `priority_weight` |
+| `validate_export` | `1` = validate after export; `0` = skip |
+| `validationMethod` | `rowCount` or `customQuery` |
+| `validationCustomQueryHiveSQL` | Custom SQL for validation against Hive |
+| `validationCustomQueryTargetSQL` | Custom SQL for validation against the target database |
+| `incr_column` | Timestamp column used to identify new rows for incremental exports |
+| `incr_validation_method` | `full` or `incr` validation scope |
+| `truncate_target` | `1` = truncate the target table before writing (full exports only) |
+| `uppercase_columns` | `-1` = auto (Oracle uppercases, others lowercase); `1` = force uppercase |
+| `forceCreateTempTable` | `1` = create a Hive temp table before exporting (required for views) |
+| `sql_where_addition` | SQL fragment appended after `WHERE` in the export query |
+
+</Accordion>
+
+---
+
+## Supporting Tables
+
+### `dbimport_instances`
+
+Registry of remote DBImport instances that can receive copied data during the copy phase. Populated when running multi-cluster deployments.
+
+| Column | Description |
+|---|---|
+| `instance_id` | Auto-incremented primary key |
+| `name` | Logical name for this DBImport instance |
+| `db_hostname` | MySQL hostname for the remote instance's configuration database |
+| `db_port` | MySQL port for the remote instance |
+| `db_database` | MySQL database name for the remote instance |
+| `db_credentials` | Encrypted credentials for the remote MySQL database |
+| `hdfs_address` | HDFS NameNode address of the remote cluster (e.g. `hdfs://hadoopcluster`) |
+| `hdfs_basedir` | HDFS base directory on the remote cluster (e.g. `/apps/dbimport`) |
+| `sync_credentials` | `1` = synchronize JDBC credentials to the remote cluster; `0` = do not sync |
+
+---
+
+### `copy_tables`
+
+Maps Hive tables to destination instances for the post-import copy phase. Wildcards in `hive_filter` allow a single row to cover many tables.
+
+| Column | Description |
+|---|---|
+| `copy_id` | Auto-incremented primary key |
+| `hive_filter` | Semicolon-separated `HIVE_DB.HIVE_TABLE` filter patterns. Wildcards (`*`) supported |
+| `destination` | Name of the target `dbimport_instances` entry |
+| `data_transfer` | `Synchronous` = copy data during the import run; `Asynchronous` = copy in a background process |
+
+---
+
+### `etl_jobs`
+
+Defines ETL jobs that can be referenced by `airflow_etl_dags`. Each row represents one transformation task.
+
+| Column | Description |
+|---|---|
+| `job` | Job group name |
+| `task` | Task name within the job |
+| `job_id` | Unique job identifier |
+| `etl_type` | Type of ETL operation |
+| `include_in_airflow` | `1` = include in Airflow DAG generation |
+| `source_db` | Source Hive database |
+| `source_table` | Source Hive table |
+| `target_db` | Target Hive database |
+| `target_table` | Target Hive table |
+| `operator_notes` | Free-text notes |
+
+---
+
+### `configuration`
+
+Stores all runtime global settings as key/value rows. See the [Global Settings](/configuration/global-settings) page for the full list of supported keys.
+
+| Column | Description |
+|---|---|
+| `configKey` | Setting name — maintained by the setup tool; do not rename |
+| `valueInt` | Integer or boolean (`0`/`1`) value |
+| `valueStr` | String value |
+| `valueDate` | Date/time value (used internally) |
+| `description` | Human-readable description of the setting |
+
+---
+
+### `import_statistics` and `export_statistics`
+
+At the end of every import or export, DBImport appends a row to these tables recording timing, row counts, byte sizes, and per-stage durations. The tables grow indefinitely — DBImport never truncates them automatically.
+
+<Info>
+A companion `import_statistics_last` / `export_statistics_last` table mirrors only the most recent row for each table. Query the `_last` table for dashboards and monitoring to avoid expensive aggregations over millions of historical rows.
+</Info>
+
+Key columns (shared by both tables):
+
+| Column | Description |
+|---|---|
+| `hive_db` / `dbalias` | Identifies the import (Hive DB) or export (connection alias) |
+| `hive_table` / `target_table` | Table involved in the operation |
+| `rows` | Number of rows transferred |
+| `size` | Total bytes transferred |
+| `sessions` | Number of parallel sessions (mappers/executors) used |
+| `duration` | Total operation duration in seconds |
+| `start` / `stop` | Timestamps for the operation |
+
+---
+
+### `atlas_column_cache` and `atlas_key_cache`
+
+Local caches used by Atlas discovery to detect schema changes without querying the Atlas server on every run. These tables are managed entirely by DBImport — do not modify them manually.
+
+<Tabs>
+  <Tab title="atlas_column_cache">
+    Caches column-level metadata for each remote table discovered through Atlas.
+
+    | Column | Description |
+    |---|---|
+    | `hostname` | Remote database hostname |
+    | `port` | Remote database port |
+    | `database_name` | Remote database name |
+    | `schema_name` | Remote schema name |
+    | `table_name` | Remote table name |
+    | `column_name` | Column name |
+    | `column_type` | Data type of the column |
+    | `column_length` | Column length / precision |
+    | `column_is_nullable` | Whether null values are permitted |
+    | `column_comment` | Column comment from the source system |
+    | `table_comment` | Table comment from the source system |
+    | `table_type` | Table type (e.g. TABLE, VIEW) |
+    | `table_create_time` | Timestamp when the source table was created |
+    | `default_value` | Default value of the column |
+  </Tab>
+  <Tab title="atlas_key_cache">
+    Caches constraint and key metadata (primary keys, foreign keys, indexes).
+
+    | Column | Description |
+    |---|---|
+    | `hostname` | Remote database hostname |
+    | `port` | Remote database port |
+    | `database_name` | Remote database name |
+    | `schema_name` | Remote schema name |
+    | `table_name` | Remote table name |
+    | `constraint_name` | Constraint name |
+    | `constraint_type` | Constraint type (e.g. `PRIMARY KEY`, `FOREIGN KEY`) |
+    | `column_name` | Column participating in the constraint |
+    | `reference_schema_name` | Schema containing the referenced table (for FK constraints) |
+    | `reference_table_name` | Referenced table name |
+    | `reference_column_name` | Referenced column name |
+    | `col_key_position` | Ordinal position of the column in the key |
+  </Tab>
+</Tabs>

@@ -1,0 +1,387 @@
+---
+title: "REST API: JDBC Connection Endpoints Reference"
+sidebarTitle: "Connections"
+description: "Full reference for all /connection REST API endpoints — list, create, update, delete, encrypt credentials, test, search, and generate JDBC URLs."
+---
+
+The connection endpoints manage the JDBC connection aliases stored in DBImport. Each alias maps a logical name to a JDBC URL and its associated metadata such as credentials, maintenance windows, Atlas discovery settings, and session limits. All endpoints require a valid Bearer token obtained from `POST /oauth2/access_token`.
+
+<Note>
+  All responses are capped at 1,000 rows by default. The `content-rows` and `content-max-returned-rows` response headers report the actual and maximum row counts respectively. Search endpoints additionally return `content-total-rows` with the unfiltered total.
+</Note>
+
+---
+
+## GET /connection
+
+Returns a list of all configured JDBC connection aliases. When `listOnlyName=true`, only the `name` field is returned; otherwise `connectionString` and `serverType` are also included.
+
+**Authentication:** Bearer token required
+
+### Query Parameters
+
+<ParamField query="listOnlyName" type="boolean" default="false">
+  When `true`, only the connection name is returned — no JDBC URL or server type.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="name" type="string" required>
+  The unique alias name for this JDBC connection.
+</ResponseField>
+
+<ResponseField name="connectionString" type="string">
+  The JDBC URL. Omitted when `listOnlyName=true`.
+</ResponseField>
+
+<ResponseField name="serverType" type="string">
+  Detected database type (e.g. `MySQL`, `Oracle`, `MSSQL Server`, `PostgreSQL`, `Snowflake`, `DB2 UDB`, `DB2 AS400`). Omitted when `listOnlyName=true`.
+</ResponseField>
+
+```json title="Example response"
+[
+  {
+    "name": "oracle_prod",
+    "connectionString": "jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=db.example.com)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=ORCL)))",
+    "serverType": "Oracle"
+  }
+]
+```
+
+---
+
+## POST /connection
+
+Creates a new JDBC connection alias or updates an existing one. The operation is an upsert — if the `name` already exists, all supplied fields are updated.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  Unique alias name for this connection. Acts as the primary key.
+</ParamField>
+
+<ParamField body="connectionString" type="string" required>
+  Full JDBC URL for the target database.
+</ParamField>
+
+<ParamField body="privateKeyPath" type="string">
+  Path to the private key file used for key-based authentication.
+</ParamField>
+
+<ParamField body="publicKeyPath" type="string">
+  Path to the corresponding public key file.
+</ParamField>
+
+<ParamField body="credentials" type="string">
+  Encrypted credential string produced by `POST /connection/encryptCredentials`.
+</ParamField>
+
+<ParamField body="source" type="string">
+  Datalake source label for lineage and cataloguing.
+</ParamField>
+
+<ParamField body="forceString" type="integer" default="0">
+  Force all columns to be imported as strings. `0` = disabled, `1` = enabled, `-1` = use global default.
+</ParamField>
+
+<ParamField body="maxSessions" type="integer">
+  Maximum number of concurrent import sessions allowed on this connection.
+</ParamField>
+
+<ParamField body="createDatalakeImport" type="boolean" default="true">
+  Whether to create a datalake import entry when tables are added.
+</ParamField>
+
+<ParamField body="timeWindowStart" type="string">
+  Start time of the allowed import window in `HH:MM:SS` format.
+</ParamField>
+
+<ParamField body="timeWindowStop" type="string">
+  End time of the allowed import window in `HH:MM:SS` format.
+</ParamField>
+
+<ParamField body="timeWindowTimezone" type="string">
+  Timezone for the maintenance window (e.g. `Europe/Stockholm`).
+</ParamField>
+
+<ParamField body="operatorNotes" type="string">
+  Free-text notes for operators.
+</ParamField>
+
+<ParamField body="contactInformation" type="string">
+  Contact details for the owner of this connection.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Human-readable description of this connection.
+</ParamField>
+
+<ParamField body="owner" type="string">
+  Team or user responsible for this connection.
+</ParamField>
+
+<ParamField body="environment" type="string">
+  Environment label (e.g. `production`, `staging`).
+</ParamField>
+
+<ParamField body="seedFile" type="string">
+  Path to a seed file used for pre-populating tables.
+</ParamField>
+
+<ParamField body="createForeignKey" type="boolean" default="true">
+  Whether to create foreign-key constraints on imported tables.
+</ParamField>
+
+<ParamField body="atlasDiscovery" type="boolean" default="true">
+  Whether Apache Atlas should discover tables on this connection.
+</ParamField>
+
+<ParamField body="atlasIncludeFilter" type="string">
+  Regex or glob pattern to include specific schemas/tables during Atlas discovery.
+</ParamField>
+
+<ParamField body="atlasExcludeFilter" type="string">
+  Regex or glob pattern to exclude schemas/tables from Atlas discovery.
+</ParamField>
+
+<ParamField body="atlasLastDiscovery" type="string">
+  Timestamp of the last Atlas discovery run (`YYYY-MM-DD HH:MM:SS`). Read-only in practice.
+</ParamField>
+
+### Response
+
+Returns `"ok"` on success with HTTP `200`. Returns HTTP `500` on error with an error message string.
+
+---
+
+## GET /connection/\{connection\}
+
+Returns the full detail record for a single named connection.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  The connection alias name to retrieve.
+</ParamField>
+
+### Response Fields
+
+All fields from the `connectionDetails` model are returned. Key fields include:
+
+<ResponseField name="name" type="string" required>
+  The connection alias name.
+</ResponseField>
+
+<ResponseField name="connectionString" type="string" required>
+  Full JDBC URL.
+</ResponseField>
+
+<ResponseField name="credentials" type="string">
+  Encrypted credential blob (if set).
+</ResponseField>
+
+<ResponseField name="forceString" type="integer">
+  String coercion setting: `0` = off, `1` = on, `-1` = global default.
+</ResponseField>
+
+<ResponseField name="maxSessions" type="integer">
+  Maximum concurrent import sessions.
+</ResponseField>
+
+<ResponseField name="createDatalakeImport" type="boolean">
+  Whether datalake import creation is enabled.
+</ResponseField>
+
+<ResponseField name="timeWindowStart" type="string">
+  Maintenance window start time (`HH:MM:SS`).
+</ResponseField>
+
+<ResponseField name="timeWindowStop" type="string">
+  Maintenance window stop time (`HH:MM:SS`).
+</ResponseField>
+
+<ResponseField name="atlasDiscovery" type="boolean">
+  Atlas discovery enabled flag.
+</ResponseField>
+
+<ResponseField name="atlasLastDiscovery" type="string">
+  Timestamp of last Atlas discovery (`YYYY-MM-DD HH:MM:SS`).
+</ResponseField>
+
+Returns HTTP `404` if the connection does not exist.
+
+---
+
+## DELETE /connection/\{connection\}
+
+Permanently removes a connection alias and all its metadata. This does **not** automatically remove import or export table definitions that reference this connection.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  The connection alias name to delete.
+</ParamField>
+
+### Response
+
+Returns `"ok"` with HTTP `200` on success. Returns HTTP `404` with `"Connection does not exist"` if the alias is not found.
+
+---
+
+## POST /connection/encryptCredentials
+
+Encrypts a plain-text username and password using the connection's configured keypair and stores the result back on the connection record. Use this after creating a connection to securely store its credentials.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="connection" type="string" required>
+  The connection alias to store credentials against.
+</ParamField>
+
+<ParamField body="username" type="string" required>
+  The database username to encrypt.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The database password to encrypt.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Credentials updated successfully"` on success, or an error message on failure.
+</ResponseField>
+
+Returns HTTP `200` on success, HTTP `500` on failure.
+
+---
+
+## POST /connection/generateJDBCconnectionString
+
+Generates a correctly-formatted JDBC connection URL for a given database type, version, host, port, and database name. The `databaseType` / `version` combination must match a configured JDBC driver entry (see `GET /config/getJDBCdrivers`).
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="databaseType" type="string" required>
+  Database platform identifier. Supported values: `DB2 AS400`, `DB2 UDB`, `MySQL`, `Oracle`, `PostgreSQL`, `Progress DB`, `SQL Server`, `CacheDB`, `Snowflake`, `Informix`, `SQL Anywhere`.
+</ParamField>
+
+<ParamField body="version" type="string" required>
+  Driver version label. Typically `"default"`. SQL Server also supports `"jTDS"`.
+</ParamField>
+
+<ParamField body="hostname" type="string" required>
+  Database server hostname or IP address.
+</ParamField>
+
+<ParamField body="port" type="integer">
+  TCP port number. If omitted, the generated URL will not include a port.
+</ParamField>
+
+<ParamField body="database" type="string" required>
+  Database or service name to connect to.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="connectionString" type="string">
+  The generated JDBC URL string ready to paste into a connection record.
+</ResponseField>
+
+```json title="Example request"
+{
+  "databaseType": "PostgreSQL",
+  "version": "default",
+  "hostname": "pg.example.com",
+  "port": 5432,
+  "database": "analytics"
+}
+```
+
+```json title="Example response"
+{
+  "connectionString": "jdbc:postgresql://pg.example.com:5432/analytics"
+}
+```
+
+Returns HTTP `404` if the `databaseType`/`version` combination is not a valid driver entry.
+
+---
+
+## POST /connection/search
+
+Searches and filters connection records. All fields are optional and support `*` or `%` as wildcards. Only fields provided in the request body are applied as filters.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="name" type="string">
+  Filter by connection alias name. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="connectionString" type="string">
+  Filter by JDBC URL substring. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="timeWindowTimezone" type="string">
+  Filter by configured timezone.
+</ParamField>
+
+<ParamField body="operatorNotes" type="string">
+  Filter by operator notes text. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="contactInformation" type="string">
+  Filter by contact information. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Filter by description text. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="owner" type="string">
+  Filter by owner name. Supports `*` wildcard.
+</ParamField>
+
+### Response Fields
+
+Same fields as `GET /connection` (name, connectionString, serverType). Response headers include `content-rows`, `content-max-returned-rows`, and `content-total-rows`.
+
+---
+
+## GET /connection/testConnection/\{connection\}
+
+Opens a live JDBC connection to the named alias and reports success or failure. The test invokes the `manage --testConnection` subprocess internally.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  The connection alias name to test.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  Human-readable test result message. On success, indicates the connection succeeded. On failure, contains the error output from the JDBC driver.
+</ResponseField>
+
+Returns HTTP `200` on a successful connection test, HTTP `500` if the connection attempt fails.
+
+```json title="Example success response"
+{
+  "result": "Connection test successful"
+}
+```

@@ -1,0 +1,125 @@
+{
+  "projectType": "data-platform",
+  "projectName": "DBImport",
+  "projectDescription": "DBImport is an ELT ingestion tool that automates importing, exporting, and orchestrating data flows between relational databases and Hadoop/Hive data lakehouses, with Airflow scheduling, multi-cluster replication, and Apache Atlas lineage tracking.",
+  "theme": "aspen",
+  "primaryColor": "#2980b9",
+  "lightColor": "#ef9c1c",
+  "darkColor": "#847c29",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "requirements",
+              "installation"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/overview",
+              "concepts/import-methods",
+              "concepts/export-methods"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/global-settings",
+              "configuration/jdbc-connections",
+              "configuration/database-tables"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/airflow-integration",
+              "guides/multi-cluster",
+              "guides/atlas-integration",
+              "guides/deployment",
+              "guides/statistics"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/import-cli",
+              "operations/export-cli",
+              "operations/manage-cli"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "REST API",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/connections",
+              "api/imports",
+              "api/exports",
+              "api/airflow",
+              "api/configuration",
+              "api/users"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Full and incremental import/export to Oracle, MSSQL, MySQL, DB2, PostgreSQL, Snowflake, and AWS S3",
+    "Auto-discovery of tables and views from source systems",
+    "Automatic schema change detection and propagation to Hive",
+    "Tight integration with Apache Airflow for scheduling and parallel execution",
+    "Multi-cluster replication via synchronous or asynchronous distcp",
+    "Apache Atlas integration for data governance and lineage tracking",
+    "Support for Oracle Flashback Query and MSSQL Change Tracking CDC",
+    "Spark and Hive ETL engines with ORC/Parquet/Iceberg table formats",
+    "Row count and custom SQL validation on every import/export",
+    "REST API server with JWT authentication for programmatic management",
+    "Statistics streaming to database tables, REST endpoints, or Kafka"
+  ],
+  "publicApiSurface": [
+    "bin/import — CLI for running table imports (-h, -t, -I, -C, -E flags)",
+    "bin/export — CLI for running table exports (-a, -S, -T flags)",
+    "bin/manage — Admin CLI (--addImportTable, --addExportTable, --testConnection, --encryptCredentials, --airflowGenerate, etc.)",
+    "bin/copy — Multi-cluster copy operations (--copyAirflowImportDAG, --exportAndCopyTable, --importCopiedTable)",
+    "bin/deploy — DAG deployment to remote instances (--deployAirflowImportDAG, --deployAirflowExportDAG)",
+    "bin/restServer — REST API server (FastAPI/Gunicorn)",
+    "POST /oauth2/access_token — Authenticate and receive JWT",
+    "GET /status — Health check",
+    "GET /connection — List all JDBC connections",
+    "POST /connection — Create or update a JDBC connection",
+    "GET /connection/{connection} — Get connection details",
+    "POST /connection/testConnection/{connection} — Test a connection",
+    "GET /import/db — List all import target databases",
+    "POST /import/discover/search — Discover importable tables",
+    "POST /import/discover/add — Add discovered tables",
+    "GET /import/table/{database}/{table} — Get import table definition",
+    "POST /import/table/{database}/{table} — Create or update import table",
+    "POST /import/table/{database}/{table}/repair — Repair import state",
+    "POST /import/table/{database}/{table}/reset — Reset import state",
+    "GET /export/table/{connection}/{schema}/{table} — Get export table definition",
+    "POST /export/table/{connection}/{schema}/{table} — Create or update export table",
+    "GET /airflow/dags — List all Airflow DAGs",
+    "GET /airflow/generate_dag — Generate a DAG file",
+    "POST /airflow/dags/import/{dagname} — Create or update import DAG",
+    "GET /config/getConfig — Get global DBImport configuration",
+    "POST /config/updateConfig — Update global configuration"
+  ]
+}

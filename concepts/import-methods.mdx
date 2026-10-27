@@ -1,0 +1,449 @@
+---
+title: "DBImport Import Methods: Full, Incremental, and CDC"
+sidebarTitle: "Import Methods"
+description: "Explore all DBImport import methods: full, incremental, Oracle Flashback, and MSSQL Change Tracking, with stage numbers, phase settings, and guidance."
+---
+
+Choosing the right import method is one of the most important configuration decisions in DBImport. The method determines two things simultaneously: how data is read from the source system (the `import_phase`) and what happens to that data in Hive once it arrives (the `etl_phase`). Together these two settings define the import method. Some methods read the entire source table every time; others track exactly which rows changed and can even detect deletes without touching transaction logs.
+
+<Note>
+  Stage numbers shown throughout this page are the internal stage IDs used by DBImport. You will see these values in the `import_stage` and `import_retries_log` tables. Stages in the **1xxx** range cover the Source/Sqoop/Spark phase; stages in the **3xxx** range cover the Hive/ETL phase.
+</Note>
+
+## Quick Reference
+
+| Method | Import Phase | ETL Phase | Detects Deletes | Creates History | Engine |
+|---|---|---|---|---|---|
+| Truncate & Insert | `full` | `truncate_insert` | No | No | Sqoop or Spark |
+| Insert | `full` | `insert` | No | No | Sqoop or Spark |
+| Full Merge | `full` | `merge` | No | No | Sqoop or Spark |
+| Full Merge + History Audit | `full` | `merge_history_audit` | Yes (via full scan) | Yes | Sqoop or Spark |
+| None (staging only) | `full` | `none` | No | No | Sqoop or Spark |
+| Incremental Insert | `incr` | `insert` | No | No | Sqoop or Spark |
+| Incremental Merge | `incr` | `merge` | No | No | Sqoop or Spark |
+| Incremental Merge + History | `incr` | `merge_history_audit` | No | Yes | Sqoop or Spark |
+| Oracle Flashback Merge | `oracle_flashback` | `merge` | Yes | No | Sqoop only |
+| Oracle Flashback + History | `oracle_flashback` | `merge_history_audit` | Yes | Yes | Sqoop only |
+| MSSQL Change Tracking Merge | `mssql_change_tracking` | `merge` | Yes | No | Spark only |
+| MSSQL Change Tracking + History | `mssql_change_tracking` | `merge_history_audit` | Yes | Yes | Spark only |
+
+---
+
+## Full Import Methods
+
+Full imports read the entire source table on every run. The `import_phase` is always `full`. What varies is the `etl_phase`, which controls how the data is applied to the Target table.
+
+<Accordion title="Truncate & Insert — full + truncate_insert">
+
+The most common import method. The entire source table is loaded into the Import table, then the Target table is truncated and all rows are re-inserted. Every run starts from a clean slate.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `full` |
+| ETL Phase | `truncate_insert` |
+| Legacy import_type | `full` |
+
+**When to use it:** Any table where you want a complete, fresh copy in Hive on every run and do not need change history or delete detection.
+
+**Stage flow:**
+
+| Stage | Name | Description |
+|---|---|---|
+| 1010 | Getting source table schema | Reads columns, types, PKs, FKs, and comments from the source database |
+| 1011 | Clear table rowcount | Clears the previous import's row count |
+| 1012 | Get source table rowcount | Executes `SELECT COUNT(1)` on the source table |
+| 1013 | Sqoop import | Extracts the source table and writes Parquet files |
+| 1014 | Validate Sqoop import | Compares Sqoop row count against source row count |
+| 1049 | Stage 1 Completed | Marks end of the Source/Sqoop stage |
+| 3050 | Connecting to Hive | Opens and tests the Hive connection |
+| 3051 | Create Import table | Creates or updates the external Import table in Hive |
+| 3052 | Get Import table rowcount | Executes `SELECT COUNT(1)` on the Import table |
+| 3053 | Validate Import table | Compares Import table rows against source rows |
+| 3054 | Remove Hive locks | Removes stale Hive locks via the metastore |
+| 3055 | Create Target table | Creates or updates the Target table |
+| 3056 | Truncate Target table | Clears all rows from the Target table |
+| 3057 | Copy rows to Target table | Inserts all rows from Import table to Target table |
+| 3058 | Update Hive statistics | Refreshes Hive table statistics |
+| 3059 | Get Target table rowcount | Executes `SELECT COUNT(1)` on the Target table |
+| 3060 | Validate Target table | Compares Target table rows against source rows |
+
+</Accordion>
+
+<Accordion title="Insert — full + insert">
+
+Reads the full source table but appends rows to the Target table without truncating it first. This will likely produce duplicate rows on repeated runs unless the source table only ever appends new data.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `full` |
+| ETL Phase | `insert` |
+| Legacy import_type | `full_insert` |
+
+**When to use it:** Rare. Use only when intentional accumulation of data across runs is desired and duplicates are acceptable. Requires `create_datalake_import = 1` on the JDBC connection to allow Import table validation.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1010–1049 | Source/Sqoop stages (same as Truncate & Insert) |
+| 3100 | Connecting to Hive |
+| 3101 | Create Import table |
+| 3102 | Get Import table rowcount |
+| 3103 | Validate Import table |
+| 3104 | Remove Hive locks |
+| 3105 | Create Target table |
+| 3106 | Copy rows to Target table *(no truncate step)* |
+| 3107 | Update Hive statistics |
+| 3108 | Get Target table rowcount |
+| 3109 | Validate Target table |
+
+</Accordion>
+
+<Accordion title="Full Merge — full + merge">
+
+Reads the entire source table and performs a PK-based merge into the Target table. DBImport adds change-tracking metadata columns to the Target table so you can identify when each row was last modified. The merge compares all column values — if any value changed, the row is updated. Rows that no longer exist in the source are **not** deleted.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `full` |
+| ETL Phase | `merge` |
+| Legacy import_type | `full_merge_direct` |
+
+**When to use it:** Tables without a reliable timestamp or auto-increment column where you still want to detect row-level changes. Be aware this generates a large Hive job because every row in both Import and Target tables is compared.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1010–1049 | Source/Sqoop stages (same as Truncate & Insert) |
+| 3250 | Connecting to Hive |
+| 3251 | Create Import table |
+| 3252 | Get Import table rowcount |
+| 3253 | Validate Import table |
+| 3254 | Remove Hive locks |
+| 3255 | Create Target table |
+| 3256 | Create Delete table |
+| 3257 | Merge Import table with Target table *(all columns compared)* |
+| 3258 | Update Hive statistics |
+| 3259 | Get Target table rowcount |
+| 3260 | Validate Target table |
+
+</Accordion>
+
+<Accordion title="Full Merge with History Audit — full + merge_history_audit">
+
+The most comprehensive full import method. Reads the entire source table, merges changes into the Target table by comparing all column values, and also identifies rows that were deleted in the source system. Deleted rows are inserted into the History Audit table and removed from the Target table.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `full` |
+| ETL Phase | `merge_history_audit` |
+| Legacy import_type | `full_merge_direct_history` |
+
+**When to use it:** Tables where you need complete audit history including deletes, and there is no CDC mechanism available in the source system. This is the largest and most resource-intensive import method — plan the run window accordingly.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1010–1049 | Source/Sqoop stages (same as Truncate & Insert) |
+| 3200 | Connecting to Hive |
+| 3201 | Create Import table |
+| 3202 | Get Import table rowcount |
+| 3203 | Validate Import table |
+| 3204 | Remove Hive locks |
+| 3205 | Create Target table |
+| 3206 | Create History table |
+| 3207 | Create Delete table |
+| 3208 | Merge Import with Target *(detects inserts, updates, deletes)* |
+| 3209 | Update Hive statistics |
+| 3210 | Get Target table rowcount |
+| 3211 | Validate Target table |
+
+</Accordion>
+
+<Accordion title="None (Staging Only) — full + none">
+
+Reads the full source table and creates the Import table in Hive, then stops. No ETL phase runs and no Target table is created or updated. This is useful when a custom downstream ETL process will consume the raw Import table data.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `full` |
+| ETL Phase | `none` |
+
+**When to use it:** Complex ETL pipelines where DBImport is responsible only for the extraction and staging step. The consuming process is responsible for anything beyond the Import table.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1010–1049 | Source/Sqoop stages (same as Truncate & Insert) |
+| 3450 | Connecting to Hive |
+| 3451 | Create Import table |
+| 3452 | Get Import table rowcount |
+| 3453 | Validate Import table *(pipeline ends here)* |
+
+</Accordion>
+
+---
+
+## Incremental Import Methods
+
+Incremental imports track the high-water mark from the previous run and read only the new rows since then. The `import_phase` is `incr`. There are two incremental strategies:
+
+- **Append:** Requires an integer column with `AUTO_INCREMENT` or equivalent that increases with every new row.
+- **Last Modified:** Requires a date or timestamp column that is updated whenever a row changes.
+
+<Warning>
+  Incremental imports do **not** detect deleted rows. If a row is deleted in the source, it will remain in the Target table. Use Oracle Flashback or MSSQL Change Tracking if delete detection is required.
+</Warning>
+
+<Accordion title="Incremental Insert — incr + insert">
+
+Reads only new rows from the source (based on the incremental column) and inserts them into the Target table. The min and max values used for this run are saved after the import completes so the next run starts from where this one left off.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `incr` |
+| ETL Phase | `insert` |
+| Legacy import_type | `incr` |
+
+**When to use it:** Append-only log tables or event tables where rows are never updated or deleted, only added.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1110 | Getting source table schema |
+| 1111 | Clear table rowcount |
+| 1112 | Sqoop import *(with incremental WHERE clause)* |
+| 1113 | Get source table rowcount *(within incremental window)* |
+| 1114 | Validate Sqoop import |
+| 1149 | Stage 1 Completed |
+| 3150 | Connecting to Hive |
+| 3151 | Create Import table |
+| 3152 | Get Import table rowcount |
+| 3153 | Validate Import table |
+| 3154 | Remove Hive locks |
+| 3155 | Create Target table |
+| 3156 | Copy rows to Target table |
+| 3157 | Update Hive statistics |
+| 3158 | Get Target table rowcount |
+| 3159 | Validate Target table |
+| 3160 | Save pending incremental values |
+
+</Accordion>
+
+<Accordion title="Incremental Merge — incr + merge">
+
+Reads only changed rows from the source and merges them into the Target table using a PK-based merge. Existing rows with matching PKs are updated; new rows are inserted. Deleted rows are not detected.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `incr` |
+| ETL Phase | `merge` |
+| Legacy import_type | `incr_merge_direct` |
+
+**When to use it:** Tables that have both inserts and updates but not deletes, where you want the Target table to always reflect the current state of changed rows.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1110–1149 | Source/Sqoop incremental stages |
+| 3300 | Connecting to Hive |
+| 3301 | Create Import table |
+| 3302 | Get Import table rowcount |
+| 3303 | Validate Import table |
+| 3304 | Remove Hive locks |
+| 3305 | Create Target table |
+| 3306 | Merge Import table with Target table *(PK-based)* |
+| 3307 | Update Hive statistics |
+| 3308 | Get Target table rowcount |
+| 3309 | Validate Target table |
+| 3310 | Save pending incremental values |
+
+</Accordion>
+
+<Accordion title="Incremental Merge with History Audit — incr + merge_history_audit">
+
+Reads only changed rows from the source, merges them into the Target table via PK-based merge, and inserts all new and changed rows into the History Audit table. Deleted rows are still not detected, but the full change log of inserts and updates is preserved.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `incr` |
+| ETL Phase | `merge_history_audit` |
+
+**When to use it:** Tables with inserts and updates where you need a complete audit trail of every change over time, but the source system does not support CDC.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1110–1149 | Source/Sqoop incremental stages |
+| 3350 | Connecting to Hive |
+| 3351 | Create Import table |
+| 3352 | Get Import table rowcount |
+| 3353 | Validate Import table |
+| 3354 | Remove Hive locks |
+| 3355 | Create Target table |
+| 3356 | Create History table |
+| 3357 | Merge Import table with Target table |
+| 3358 | Update Hive statistics |
+| 3359 | Get Target table rowcount |
+| 3360 | Validate Target table |
+| 3361 | Save pending incremental values |
+
+</Accordion>
+
+---
+
+## Oracle Flashback Methods
+
+Oracle Flashback uses the Oracle Flashback Version Query (`VERSION BETWEEN SCN`) to read only the rows that changed between the previous import's System Change Number (SCN) and the current SCN. Unlike incremental imports, Oracle Flashback detects **deleted rows** without requiring a timestamp or auto-increment column. The source table must have sufficient undo retention to cover the period between imports.
+
+<Warning>
+  Oracle Flashback only supports **Sqoop** as the import tool. It cannot be used with Spark.
+</Warning>
+
+<Accordion title="Oracle Flashback Merge — oracle_flashback + merge">
+
+Uses the Oracle Flashback Version Query to fetch changed rows and merges them into the Target table. Detects inserts, updates, and deletes. Deleted rows are removed from the Target table.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `oracle_flashback` |
+| ETL Phase | `merge` |
+
+**When to use it:** Oracle source tables that change frequently and where delete detection is required, without a separate CDC platform.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1210 | Getting source table schema |
+| 1211 | Clear table rowcount |
+| 1212 | Sqoop import *(Oracle VERSION BETWEEN SCN query)* |
+| 1213 | Get source table rowcount *(using VERSIONS BETWEEN SCN clause)* |
+| 1214 | Validate Sqoop import |
+| 1249 | Stage 1 Completed |
+| 3400 | Connecting to Hive |
+| 3401 | Create Import table |
+| 3402 | Get Import table rowcount |
+| 3403 | Validate Import table |
+| 3404 | Remove Hive locks |
+| 3405 | Create Target table |
+| 3406 | Merge Import table with Target table |
+| 3407 | Update Hive statistics |
+| 3408 | Get Target table rowcount |
+| 3409 | Validate Target table |
+| 3410 | Save pending incremental values |
+
+</Accordion>
+
+<Accordion title="Oracle Flashback Merge with History Audit — oracle_flashback + merge_history_audit">
+
+Same as Oracle Flashback Merge but also writes all changed and deleted rows into the History Audit table, giving full point-in-time change history.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `oracle_flashback` |
+| ETL Phase | `merge_history_audit` |
+
+**When to use it:** Oracle tables that require a full audit log of every change and deletion, with no CDC infrastructure available.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1210–1249 | Source/Sqoop Oracle Flashback stages |
+| 3550 | Connecting to Hive |
+| 3551 | Create Import table |
+| 3552 | Get Import table rowcount |
+| 3553 | Validate Import table |
+| 3554 | Remove Hive locks |
+| 3555 | Create Target table |
+| 3556 | Create History table |
+| 3557 | Merge Import table with Target table |
+| 3558 | Update Hive statistics |
+| 3559 | Get Target table rowcount |
+| 3560 | Validate Target table |
+| 3561 | Save pending incremental values |
+
+</Accordion>
+
+---
+
+## MSSQL Change Tracking Methods
+
+Microsoft SQL Server Change Tracking tracks inserts, updates, and deletes at the row level using SQL Server's built-in Change Tracking feature. DBImport reads these changes using standard SQL — no transaction log access is required. At the start of each import, DBImport validates that the Change Tracking data for the configured range is still available. If the range has expired, DBImport automatically falls back to a full initial import and truncates the Target table.
+
+<Warning>
+  MSSQL Change Tracking only supports **Spark** as the import tool. Change Tracking must be enabled on both the database and the specific table in the source SQL Server instance.
+</Warning>
+
+<Accordion title="MSSQL Change Tracking Merge — mssql_change_tracking + merge">
+
+Uses SQL Server Change Tracking to fetch only changed rows and merges them into the Target table using a PK-based merge. Detects inserts, updates, and deletes.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `mssql_change_tracking` |
+| ETL Phase | `merge` |
+
+**When to use it:** SQL Server source tables where Change Tracking is already enabled and you want efficient delta imports with delete detection.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1260 | Getting source table schema |
+| 1261 | Clear table rowcount |
+| 1262 | Check MSSQL Change Tracking validity *(may force full re-import)* |
+| 1265 | Spark import *(reads changed rows via Change Tracking)* |
+| 1270 | Get source table rowcount |
+| 1295 | Update Atlas *(lineage metadata)* |
+| 1299 | Stage 1 Completed |
+| 3600 | Connecting to Hive |
+| 3601 | Create Import table |
+| 3602 | Get Import table rowcount |
+| 3603 | Validate Import table |
+| 3604 | Remove Hive locks |
+| 3605 | Create Target table |
+| 3607 | Merge Import table with Target table |
+| 3608 | Update Hive statistics |
+| 3609 | Get Target table rowcount |
+| 3610 | Validate Target table |
+| 3611 | Save pending incremental values |
+
+</Accordion>
+
+<Accordion title="MSSQL Change Tracking Merge with History Audit — mssql_change_tracking + merge_history_audit">
+
+Same as MSSQL Change Tracking Merge but also writes all new, changed, and deleted rows into the History Audit table for full change history.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `mssql_change_tracking` |
+| ETL Phase | `merge_history_audit` |
+
+**When to use it:** SQL Server tables that need complete audit history with delete tracking over time.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1260–1299 | Source/Spark MSSQL Change Tracking stages |
+| 3650 | Connecting to Hive |
+| 3651 | Create Import table |
+| 3652 | Get Import table rowcount |
+| 3653 | Validate Import table |
+| 3654 | Remove Hive locks |
+| 3655 | Create Target table |
+| 3657 | Merge Import table with Target table |
+| 3658 | Update Hive statistics |
+| 3659 | Get Target table rowcount |
+| 3660 | Validate Target table |
+| 3661 | Save pending incremental values |
+
+</Accordion>

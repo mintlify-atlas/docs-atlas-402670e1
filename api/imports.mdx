@@ -1,0 +1,649 @@
+---
+title: "REST API: Import Table Configuration Endpoints"
+sidebarTitle: "Imports"
+description: "Complete reference for all /import REST API endpoints — list databases, discover tables, search, bulk update/delete, and manage individual import table definitions."
+---
+
+The import endpoints control every aspect of table ingestion configuration in DBImport. An import table definition maps a source JDBC table (identified by connection, schema, and table name) to a Hive/datalake target database and table, along with all ingestion settings: phase types, incremental mode, validation, Sqoop/Spark tuning, and column-level overrides. All endpoints require a valid Bearer token.
+
+<Note>
+  List and search endpoints cap results at 1,000 rows. Check the `content-rows` and `content-max-returned-rows` response headers. Search endpoints also include `content-total-rows` with the total unfiltered count.
+</Note>
+
+---
+
+## GET /import/db
+
+Returns a summary list of all Hive/datalake databases that have import tables configured.
+
+**Authentication:** Bearer token required
+
+### Response Fields
+
+<ResponseField name="name" type="string" required>
+  Hive database name.
+</ResponseField>
+
+<ResponseField name="tables" type="integer" required>
+  Number of import tables configured in this database.
+</ResponseField>
+
+<ResponseField name="lastImport" type="string">
+  Timestamp of the most recent completed import in this database (`YYYY-MM-DD HH:MM:SS`).
+</ResponseField>
+
+<ResponseField name="lastSize" type="integer">
+  Total bytes transferred in the last import run across all tables in this database.
+</ResponseField>
+
+<ResponseField name="lastRows" type="integer">
+  Total rows transferred in the last import run across all tables in this database.
+</ResponseField>
+
+---
+
+## POST /import/discover/search
+
+Queries the source JDBC system (via `manage --addImportTable --jsonOutput`) and returns a list of tables that exist on the source but have not yet been added to DBImport. Use this before `POST /import/discover/add` to preview what will be added.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="database" type="string" required>
+  Target Hive database name where discovered tables will be registered.
+</ParamField>
+
+<ParamField body="connection" type="string" required>
+  JDBC connection alias to inspect for new tables.
+</ParamField>
+
+<ParamField body="schemaFilter" type="string">
+  Optional source schema filter (supports wildcards).
+</ParamField>
+
+<ParamField body="tableFilter" type="string">
+  Optional source table name filter (supports wildcards).
+</ParamField>
+
+<ParamField body="addSchemaToTable" type="boolean" required>
+  When `true`, the source schema name is prepended to the Hive table name.
+</ParamField>
+
+<ParamField body="addCounterToTable" type="boolean" required>
+  When `true`, a numeric counter suffix is appended to the Hive table name to avoid conflicts.
+</ParamField>
+
+<ParamField body="counterStart" type="integer">
+  Starting value for the counter suffix. Requires `addCounterToTable=true`.
+</ParamField>
+
+<ParamField body="addCustomText" type="string">
+  Custom text to append to every generated Hive table name.
+</ParamField>
+
+### Response Fields
+
+Returns an array of discoverable tables:
+
+<ResponseField name="database" type="string" required>
+  Target Hive database.
+</ResponseField>
+
+<ResponseField name="table" type="string" required>
+  Proposed Hive table name.
+</ResponseField>
+
+<ResponseField name="connection" type="string" required>
+  Source JDBC connection alias.
+</ResponseField>
+
+<ResponseField name="sourceSchema" type="string" required>
+  Source database schema name.
+</ResponseField>
+
+<ResponseField name="sourceTable" type="string" required>
+  Source table name.
+</ResponseField>
+
+---
+
+## POST /import/discover/add
+
+Registers a list of previously-discovered tables (from `POST /import/discover/search`) into DBImport as import table definitions. Each table is created with default settings: `importPhaseType=full`, `etlPhaseType=truncate_insert`, `importTool=spark`, `etlEngine=spark`.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+An array of `discoverImportTable` objects (the same shape returned by `POST /import/discover/search`):
+
+<ParamField body="[].database" type="string" required>
+  Target Hive database name.
+</ParamField>
+
+<ParamField body="[].table" type="string" required>
+  Target Hive table name.
+</ParamField>
+
+<ParamField body="[].connection" type="string" required>
+  Source JDBC connection alias.
+</ParamField>
+
+<ParamField body="[].sourceSchema" type="string" required>
+  Source schema name.
+</ParamField>
+
+<ParamField body="[].sourceTable" type="string" required>
+  Source table name.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  Summary message such as `"3 tables created"`.
+</ResponseField>
+
+---
+
+## POST /import/search
+
+Searches and filters import table definitions. All fields are optional and support `*` or `%` wildcards. Returns the same fields as the list endpoints.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="database" type="string">
+  Filter by target Hive database. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="table" type="string">
+  Filter by target Hive table name. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="connection" type="string">
+  Filter by source JDBC connection alias.
+</ParamField>
+
+<ParamField body="sourceSchema" type="string">
+  Filter by source schema name. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="sourceTable" type="string">
+  Filter by source table name. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="importPhaseType" type="string">
+  Filter by import phase type (e.g. `full`, `incr`).
+</ParamField>
+
+<ParamField body="etlPhaseType" type="string">
+  Filter by ETL phase type (e.g. `truncate_insert`, `merge`).
+</ParamField>
+
+<ParamField body="importTool" type="string">
+  Filter by ingestion tool (e.g. `spark`, `sqoop`).
+</ParamField>
+
+<ParamField body="etlEngine" type="string">
+  Filter by ETL engine (e.g. `spark`, `hive`).
+</ParamField>
+
+<ParamField body="includeInAirflow" type="boolean">
+  Filter to tables included or excluded from Airflow scheduling.
+</ParamField>
+
+<ParamField body="operatorNotes" type="string">
+  Filter by operator notes text. Supports `*` wildcard.
+</ParamField>
+
+### Response Fields
+
+Same shape as `GET /import/table/{connection}` — see that endpoint for field definitions.
+
+---
+
+## POST /import/table
+
+Bulk-updates one or more import table records. Only the fields supplied in the request body (besides `importTables`) are applied. Omitted optional fields are left unchanged.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="importTables" type="array" required>
+  List of `{database, table}` objects identifying the records to update.
+</ParamField>
+
+<ParamField body="connection" type="string">
+  New JDBC connection alias to apply to all listed tables.
+</ParamField>
+
+<ParamField body="importPhaseType" type="string">
+  New import phase type to apply (`full`, `incr`).
+</ParamField>
+
+<ParamField body="etlPhaseType" type="string">
+  New ETL phase type to apply (e.g. `truncate_insert`, `merge`).
+</ParamField>
+
+<ParamField body="importTool" type="string">
+  New ingestion tool (`spark` or `sqoop`).
+</ParamField>
+
+<ParamField body="etlEngine" type="string">
+  New ETL engine (`spark` or `hive`).
+</ParamField>
+
+<ParamField body="includeInAirflow" type="boolean">
+  Whether to include these tables in Airflow DAG scheduling.
+</ParamField>
+
+<ParamField body="operatorNotes" type="string">
+  Operator notes to apply to all listed tables.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Ok"` on success.
+</ResponseField>
+
+---
+
+## DELETE /import/table
+
+Bulk-deletes one or more import table definitions. Column definitions are also removed via cascading delete.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+An array of primary key objects:
+
+<ParamField body="[].database" type="string" required>
+  Hive database name.
+</ParamField>
+
+<ParamField body="[].table" type="string" required>
+  Hive table name.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Ok"` on success, or an error description if the body was empty.
+</ResponseField>
+
+---
+
+## GET /import/table/\{connection\}
+
+Returns a list of all import tables associated with a given JDBC connection alias.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  JDBC connection alias to filter by.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="database" type="string" required>
+  Target Hive database name.
+</ResponseField>
+
+<ResponseField name="table" type="string" required>
+  Target Hive table name.
+</ResponseField>
+
+<ResponseField name="connection" type="string" required>
+  JDBC connection alias.
+</ResponseField>
+
+<ResponseField name="sourceSchema" type="string" required>
+  Source database schema.
+</ResponseField>
+
+<ResponseField name="sourceTable" type="string" required>
+  Source table name.
+</ResponseField>
+
+<ResponseField name="importPhaseType" type="string" required>
+  Import phase: `full` or `incr`.
+</ResponseField>
+
+<ResponseField name="etlPhaseType" type="string" required>
+  ETL phase type (e.g. `truncate_insert`, `merge`).
+</ResponseField>
+
+<ResponseField name="importTool" type="string" required>
+  Ingestion tool: `spark` or `sqoop`.
+</ResponseField>
+
+<ResponseField name="etlEngine" type="string" required>
+  ETL engine: `spark` or `hive`.
+</ResponseField>
+
+<ResponseField name="lastUpdateFromSource" type="string">
+  Timestamp of the last schema sync from source (`YYYY-MM-DD HH:MM:SS`).
+</ResponseField>
+
+<ResponseField name="includeInAirflow" type="boolean" required>
+  Whether this table is included in Airflow DAG scheduling.
+</ResponseField>
+
+<ResponseField name="operatorNotes" type="string">
+  Free-text operator notes.
+</ResponseField>
+
+---
+
+## GET /import/table/\{database\}
+
+Returns a list of all import tables configured within a specific Hive/datalake target database.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="database" type="string" required>
+  Hive target database name.
+</ParamField>
+
+### Response Fields
+
+Same fields as `GET /import/table/{connection}`.
+
+---
+
+## GET /import/table/\{database\}/\{table\}
+
+Returns the full detail record for a single import table, including all ingestion settings and optionally all column-level definitions.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="database" type="string" required>
+  Hive target database name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Hive target table name.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="includeColumns" type="boolean" default="true">
+  When `true`, the response includes a `columns` array with per-column configuration.
+</ParamField>
+
+### Response Fields
+
+All fields from `GET /import/table/{connection}` plus:
+
+<ResponseField name="sqlWhereAddition" type="string">
+  Extra SQL `WHERE` clause fragment appended to the Sqoop/Spark query.
+</ResponseField>
+
+<ResponseField name="nomergeIngestionSqlAddition" type="string">
+  SQL fragment added during no-merge ingestion mode.
+</ResponseField>
+
+<ResponseField name="airflowPriority" type="integer">
+  Task priority weight in Airflow.
+</ResponseField>
+
+<ResponseField name="validateImport" type="boolean">
+  Whether row-count validation is enabled after import.
+</ResponseField>
+
+<ResponseField name="validationMethod" type="string">
+  Validation strategy: `rowCount` or `customQuery`.
+</ResponseField>
+
+<ResponseField name="validateSource" type="string">
+  Source rowcount method: `query` or `analyze`.
+</ResponseField>
+
+<ResponseField name="validateDiffAllowed" type="integer">
+  Allowed row-count difference percentage (`-1` = global default).
+</ResponseField>
+
+<ResponseField name="sqlSessions" type="integer">
+  Number of parallel SQL sessions (mappers). `-1` = global default.
+</ResponseField>
+
+<ResponseField name="softDeleteDuringMerge" type="boolean">
+  Whether soft-delete is applied when merging incremental data.
+</ResponseField>
+
+<ResponseField name="incrMode" type="string">
+  Incremental mode: `lastmodified` or `append`.
+</ResponseField>
+
+<ResponseField name="incrColumn" type="string">
+  Column used for incremental watermark tracking.
+</ResponseField>
+
+<ResponseField name="incrValidationMethod" type="string">
+  Incremental validation method: `full` or `incr`.
+</ResponseField>
+
+<ResponseField name="incrMinvalue" type="string">
+  Current lower bound of the incremental watermark.
+</ResponseField>
+
+<ResponseField name="incrMaxvalue" type="string">
+  Current upper bound of the incremental watermark.
+</ResponseField>
+
+<ResponseField name="pkColumnOverride" type="string">
+  Comma-separated list of columns to treat as the primary key override.
+</ResponseField>
+
+<ResponseField name="splitCount" type="integer">
+  Number of Spark/Sqoop splits for parallelism.
+</ResponseField>
+
+<ResponseField name="sparkExecutorMemory" type="string">
+  Spark executor memory (e.g. `4g`).
+</ResponseField>
+
+<ResponseField name="sparkExecutors" type="integer">
+  Number of Spark executors.
+</ResponseField>
+
+<ResponseField name="sqoopCustomQuery" type="string">
+  Custom SQL query for Sqoop import (overrides the auto-generated query).
+</ResponseField>
+
+<ResponseField name="sqoopOptions" type="string">
+  Additional Sqoop command-line options.
+</ResponseField>
+
+<ResponseField name="forceString" type="integer">
+  String coercion override: `0` = off, `1` = on, `-1` = connection default.
+</ResponseField>
+
+<ResponseField name="mergeCompactionMethod" type="string">
+  ORC compaction method used during merge: `default`, `minor`, `major`, or `none`.
+</ResponseField>
+
+<ResponseField name="columns" type="array">
+  Array of column definitions when `includeColumns=true`.
+
+  <Expandable title="Column fields">
+    <ResponseField name="columnName" type="string">Hive column name.</ResponseField>
+    <ResponseField name="columnOrder" type="integer">Column position (1-based).</ResponseField>
+    <ResponseField name="sourceColumnName" type="string">Original column name on the source.</ResponseField>
+    <ResponseField name="columnType" type="string">Hive column type.</ResponseField>
+    <ResponseField name="sourceColumnType" type="string">Native column type on the source system.</ResponseField>
+    <ResponseField name="columnNameOverride" type="string">Override name to use in Hive instead of the source name.</ResponseField>
+    <ResponseField name="columnTypeOverride" type="string">Override Hive type for this column.</ResponseField>
+    <ResponseField name="forceString" type="integer">Per-column string coercion: `0`, `1`, or `-1`.</ResponseField>
+    <ResponseField name="includeInImport" type="boolean">Whether this column is included in the import.</ResponseField>
+    <ResponseField name="sourcePrimaryKey" type="integer">Primary key position on the source (null if not a PK).</ResponseField>
+    <ResponseField name="anonymizationFunction" type="string">Anonymization function applied to this column.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+Returns HTTP `404` if the import table does not exist.
+
+---
+
+## POST /import/table/\{database\}/\{table\}
+
+Creates or updates a single import table definition (upsert). The `database` and `table` path parameters set the Hive target identity; all other fields come from the request body.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="database" type="string" required>
+  Hive target database name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Hive target table name.
+</ParamField>
+
+### Request Body
+
+<ParamField body="connection" type="string" required>
+  JDBC connection alias for the source database.
+</ParamField>
+
+<ParamField body="sourceSchema" type="string" required>
+  Source schema name.
+</ParamField>
+
+<ParamField body="sourceTable" type="string" required>
+  Source table name.
+</ParamField>
+
+<ParamField body="importPhaseType" type="string" required>
+  Import phase type: `full` or `incr`.
+</ParamField>
+
+<ParamField body="etlPhaseType" type="string" required>
+  ETL phase type (e.g. `truncate_insert`, `merge`, `merge_history_audit`).
+</ParamField>
+
+<ParamField body="importTool" type="string" required>
+  Ingestion tool: `spark` or `sqoop`.
+</ParamField>
+
+<ParamField body="etlEngine" type="string" required>
+  ETL engine: `spark` or `hive`.
+</ParamField>
+
+<ParamField body="includeInAirflow" type="boolean">
+  Include in Airflow scheduling (default: `true`).
+</ParamField>
+
+<ParamField body="validateImport" type="boolean">
+  Enable post-import row-count validation (default: `true`).
+</ParamField>
+
+<ParamField body="sqlSessions" type="integer">
+  Parallel sessions/mappers. Use `-1` for global default.
+</ParamField>
+
+<ParamField body="incrMode" type="string">
+  Incremental mode for `incr` phase type: `lastmodified` or `append`.
+</ParamField>
+
+<ParamField body="incrColumn" type="string">
+  Column to use as the incremental watermark.
+</ParamField>
+
+<ParamField body="columns" type="array">
+  Optional array of column definitions to create or update alongside the table.
+</ParamField>
+
+### Response
+
+Returns `"ok"` with HTTP `200` on success, or an error message with HTTP `500`.
+
+---
+
+## DELETE /import/table/\{database\}/\{table\}
+
+Permanently deletes a single import table definition and its associated column records.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="database" type="string" required>
+  Hive target database name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Hive target table name.
+</ParamField>
+
+### Response
+
+Returns `"ok"` with HTTP `200` on success. Returns HTTP `404` with `"Table does not exist"` if not found.
+
+---
+
+## POST /import/table/\{database\}/\{table\}/repair
+
+Repairs the incremental import state for a table by invoking `manage --repairIncrementalImport`. Use this when the incremental watermark has drifted or become inconsistent.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="database" type="string" required>
+  Hive target database name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Hive target table name.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Table repair was successfully"` on success, or an error message from the `manage` subprocess.
+</ResponseField>
+
+Returns HTTP `200` on success, HTTP `500` on failure.
+
+---
+
+## POST /import/table/\{database\}/\{table\}/reset
+
+Resets the incremental import watermark to zero by invoking `manage --resetIncrementalImport`. This causes the next import run to re-ingest all rows from the source.
+
+<Warning>
+  Resetting the incremental state will cause a full re-import on the next scheduled run. Only use this when you intentionally want to reload all data.
+</Warning>
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="database" type="string" required>
+  Hive target database name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Hive target table name.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Table reset was successfully"` on success, or an error message from the `manage` subprocess.
+</ResponseField>
+
+Returns HTTP `200` on success, HTTP `500` on failure.

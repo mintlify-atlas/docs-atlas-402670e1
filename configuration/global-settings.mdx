@@ -1,0 +1,245 @@
+---
+title: "DBImport Global Configuration Settings Reference"
+sidebarTitle: "Global Settings"
+description: "Complete reference for DBImport's conf/dbimport.cfg file and the configuration table keys covering Airflow, HDFS, import, export, Hive, Kafka, and REST settings."
+---
+
+DBImport is configured through two complementary layers: the `conf/dbimport.cfg` file read at process startup, and the `configuration` table in MySQL which stores runtime operational settings. Most day-to-day tuning happens in the database table, while the config file holds connection credentials and infrastructure paths that must be available before the database is reachable.
+
+<Note>
+The current version of DBImport does not include a web UI. All configuration must be made directly in the MySQL database (e.g. using [HeidiSQL](https://www.heidisql.com/)) or by editing `conf/dbimport.cfg`.
+</Note>
+
+## The `conf/dbimport.cfg` File
+
+### Location and environment variables
+
+DBImport resolves the configuration file path using two environment variables, checked in this order:
+
+| Variable | Description |
+|---|---|
+| `$DBIMPORT_HOME` | Root installation directory. DBImport reads `$DBIMPORT_HOME/conf/dbimport.cfg` by default. **Required.** |
+| `$DBIMPORT_CONFIGFILE` | Full path to the config file. When set, overrides the path derived from `$DBIMPORT_HOME`. |
+
+If `$DBIMPORT_HOME` is not set, the process will exit immediately with an error. Setting `$DBIMPORT_CONFIGFILE` allows you to keep multiple environment-specific configurations without changing the installation directory.
+
+### Example `conf/dbimport.cfg`
+
+The file uses standard INI format with named sections. Every key listed below is required unless marked optional.
+
+```ini
+[Database]
+# MySQL host for the DBImport configuration database
+mysql_hostname = mysql.internal.example.com
+mysql_port     = 3306
+mysql_database = dbimport
+mysql_username = dbimport_user
+mysql_password = s3cr3tP@ssw0rd
+# Optional: AWS Secrets Manager secret name (replaces username/password above)
+# aws_secret_name = prod/dbimport/mysql
+
+[Kerberos]
+# Leave both empty to disable Kerberos
+principal = dbimport@EXAMPLE.COM
+keytab    = /etc/security/keytabs/dbimport.keytab
+
+[Spark]
+spark_major_version = 3
+# Additional PATH entries needed to find spark-submit
+path_append    = /opt/spark/bin
+master         = yarn
+deployMode     = client
+yarnqueue      = default
+executor_memory = 4g
+# Comma-separated list of JAR files to distribute
+jar_files      = /opt/dbimport/jars/dbimport-udf.jar
+py_files       =
+packages       = org.apache.spark:spark-avro_2.12:3.3.0
+hive_library   = /opt/spark/jars/hive-exec.jar
+dynamic_allocation = true
+spark_log_level = WARN
+
+[AWS]
+# AWS region — required when using AWS Secrets Manager or S3 exports
+region = eu-west-1
+
+[Credentials]
+# RSA keypair used to encrypt JDBC credentials stored in jdbc_connections
+private_key = /opt/dbimport/conf/dbimport_private.pem
+public_key  = /opt/dbimport/conf/dbimport_public.pem
+
+[Server]
+# Directory where the REST server writes its application logs
+logdir = /var/log/dbimport
+```
+
+<Note>
+All options are present in the shipped `conf/dbimport.cfg` template. Review and set each one before first use. The `[Credentials]` section keypair is used by `./manage --encryptCredentials` to encrypt database passwords at rest.
+</Note>
+
+---
+
+## The `configuration` Table
+
+The `configuration` table in MySQL holds operational settings that can be changed at runtime without restarting any service. Each row has a single `configKey` name and stores its value in one of three typed columns:
+
+| Column | Type | Purpose |
+|---|---|---|
+| `configKey` | `VARCHAR` | Unique setting name — maintained by the setup tool, do not rename |
+| `valueInt` | `INT` | Integer or boolean (0/1) values |
+| `valueStr` | `VARCHAR` | String values such as paths, hostnames, and topic names |
+| `valueDate` | `DATETIME` | Date/time values (used internally) |
+
+The sections below document every supported key grouped by functional area.
+
+---
+
+### Airflow
+
+<Accordion title="Airflow configuration keys">
+
+| Key | Column | Description |
+|---|---|---|
+| `airflow_dag_directory` | `valueStr` | Absolute path to the Airflow DAGs directory where DBImport writes generated DAG files |
+| `airflow_dag_staging_directory` | `valueStr` | Staging path used while generating a new DAG before it is moved to `airflow_dag_directory` |
+| `airflow_dag_file_group` | `valueStr` | Group ownership applied to every generated DAG file |
+| `airflow_dag_file_permission` | `valueStr` | File permission mode applied to every generated DAG file (e.g. `644`) |
+| `airflow_dbimport_commandpath` | `valueStr` | Full path to the DBImport installation used by Airflow tasks. May include a sudo prefix using `${SUDO_USER}` as a variable. Must end with `/` |
+| `airflow_sudo_user` | `valueStr` | Username that Airflow tasks will `sudo` to when executing DBImport. Replaces `${SUDO_USER}` in `airflow_dbimport_commandpath` |
+| `airflow_major_version` | `valueInt` | Major version of Airflow in use. Valid values: `1` or `2`. Controls the syntax of generated DAG files |
+| `airflow_disable` | `valueInt` | `1` = disable all DBImport executions triggered from Airflow (the `start` task checks this). `0` = normal operation |
+| `airflow_dummy_task_queue` | `valueStr` | Airflow queue assigned to dummy/internal tasks such as `stop` and `stage_one_complete` |
+| `airflow_url` | `valueStr` | Base URL of the Airflow web server, used for hyperlinks in log output |
+| `airflow_default_pool_size` | `valueInt` | Default Airflow pool size when DBImport creates a pool automatically |
+| `post_airflow_dag_operations` | `valueInt` | `1` = send DAG start/stop events to Kafka and/or REST endpoints |
+
+</Accordion>
+
+---
+
+### HDFS
+
+<Accordion title="HDFS configuration keys">
+
+| Key | Column | Description |
+|---|---|---|
+| `hdfs_address` | `valueStr` | HDFS NameNode address (e.g. `hdfs://hadoopcluster`) |
+| `hdfs_basedir` | `valueStr` | Root directory under which DBImport stores all imported data (e.g. `/apps/dbimport`) |
+| `hdfs_blocksize` | `valueStr` | HDFS block size in bytes. Should match `dfs.blocksize` in `hdfs-site.xml` |
+
+</Accordion>
+
+---
+
+### Import
+
+<Accordion title="Import configuration keys">
+
+| Key | Column | Description |
+|---|---|---|
+| `import_staging_database` | `valueStr` | Hive database name used as the landing zone during imports |
+| `import_history_database` | `valueStr` | Hive database where import history tables are stored |
+| `import_work_database` | `valueStr` | Hive database used for intermediate work tables during imports |
+| `import_default_sessions` | `valueInt` | Default number of parallel sessions (mappers/executors) for tables with no prior run history |
+| `import_max_sessions` | `valueInt` | Hard upper limit on parallel sessions used for any single import |
+| `sqoop_import_default_mappers` | `valueInt` | Default Sqoop mapper count for tables that have never been imported before |
+| `sqoop_import_max_mappers` | `valueInt` | Maximum number of Sqoop mappers allowed during an import |
+| `spark_import_default_executors` | `valueInt` | Default Spark executor count for tables with no prior run history |
+| `spark_import_max_executors` | `valueInt` | Maximum number of Spark executors allowed during an import |
+| `import_start_disable` | `valueInt` | `1` = prevent new import tasks from starting; running tasks complete normally |
+| `import_stage_disable` | `valueInt` | `1` = prevent new tasks from starting and halt running imports after the current stage |
+| `import_process_empty` | `valueInt` | `1` = run full import processing even for source tables that return zero rows |
+
+</Accordion>
+
+---
+
+### Export
+
+<Accordion title="Export configuration keys">
+
+| Key | Column | Description |
+|---|---|---|
+| `export_staging_database` | `valueStr` | Hive database used as a staging area during exports |
+| `export_default_sessions` | `valueInt` | Default number of parallel sessions for tables with no prior export history |
+| `export_max_sessions` | `valueInt` | Hard upper limit on parallel sessions for any single export |
+| `sqoop_export_default_mappers` | `valueInt` | Default Sqoop mapper count for tables never previously exported |
+| `sqoop_export_max_mappers` | `valueInt` | Maximum number of Sqoop mappers allowed during an export |
+| `spark_export_default_executors` | `valueInt` | Default Spark executor count for exports with no prior history |
+| `spark_export_max_executors` | `valueInt` | Maximum number of Spark executors allowed during an export |
+| `export_start_disable` | `valueInt` | `1` = prevent new export tasks from starting; running tasks complete normally |
+| `export_stage_disable` | `valueInt` | `1` = prevent new tasks from starting and halt running exports after the current stage |
+
+</Accordion>
+
+---
+
+### Hive
+
+<Accordion title="Hive configuration keys">
+
+| Key | Column | Description |
+|---|---|---|
+| `hive_validate_before_execution` | `valueInt` | `1` = run a `GROUP BY` validation query against the validate table before each import/export |
+| `hive_validate_table` | `valueStr` | The Hive table used for pre-execution validation |
+| `hive_remove_locks_by_force` | `valueInt` | `1` = forcibly remove Hive locks when they block an operation |
+| `hive_print_messages` | `valueInt` | `1` = instruct Hive to emit additional progress messages during SQL operations |
+| `hive_major_compact_after_merge` | `valueInt` | `1` = run a major ACID compaction after every merge operation completes |
+| `hive_insert_only_tables` | `valueInt` | `1` = create non-merge Hive tables as ACID insert-only tables |
+| `hive_acid_with_clusteredby` | `valueInt` | `1` = create ACID tables with a `CLUSTERED BY` clause based on the primary key. Not needed with Hive 3 and later |
+
+</Accordion>
+
+---
+
+### REST Server and Statistics
+
+<Accordion title="REST server and statistics keys">
+
+| Key | Column | Description |
+|---|---|---|
+| `post_data_to_rest` | `valueInt` | `1` = post import/export completion events to the configured REST endpoint |
+| `post_data_to_rest_extended` | `valueInt` | `1` = include extended statistics in REST payloads |
+| `rest_url` | `valueStr` | URL of the REST server that receives completion events |
+| `rest_timeout` | `valueInt` | Timeout in seconds for REST calls |
+| `rest_verifyssl` | `valueInt` | `1` = verify the REST server's SSL certificate |
+| `rest_trustcafile` | `valueStr` | Path to a CA bundle file used to verify the REST server certificate |
+| `restserver_authentication_method` | `valueStr` | Authentication method used by the built-in REST server (e.g. `local` or `pam`) |
+| `restserver_token_ttl` | `valueInt` | Lifetime in minutes of REST server authentication tokens |
+| `restserver_admin_user` | `valueStr` | Username of the default administrator account for the REST server |
+| `post_data_to_awssns` | `valueInt` | `1` = post completion events to an AWS SNS topic |
+| `post_data_to_awssns_topic` | `valueStr` | ARN of the AWS SNS topic that receives completion events |
+
+</Accordion>
+
+---
+
+### Kafka
+
+<Accordion title="Kafka configuration keys">
+
+| Key | Column | Description |
+|---|---|---|
+| `post_data_to_kafka` | `valueInt` | `1` = publish import/export completion events to the configured Kafka topic |
+| `post_data_to_kafka_extended` | `valueInt` | `1` = include extended statistics in Kafka messages |
+| `kafka_brokers` | `valueStr` | Comma-separated list of Kafka broker addresses (e.g. `broker1:9092,broker2:9092`) |
+| `kafka_topic` | `valueStr` | Kafka topic name that receives completion event messages |
+| `kafka_saslmechanism` | `valueStr` | SASL mechanism used for Kafka authentication (e.g. `PLAIN`, `SCRAM-SHA-256`) |
+| `kafka_securityprotocol` | `valueStr` | Kafka security protocol (e.g. `SASL_SSL`, `PLAINTEXT`) |
+| `kafka_trustcafile` | `valueStr` | Path to the CA trust file used for Kafka SSL verification |
+
+</Accordion>
+
+---
+
+### Timezone and Cluster
+
+<Accordion title="Timezone and cluster keys">
+
+| Key | Column | Description |
+|---|---|---|
+| `timezone` | `valueStr` | IANA timezone name used when interpreting all configured schedule times (e.g. `Europe/Stockholm`) |
+| `cluster_name` | `valueStr` | Logical name of the Hadoop cluster — used in Atlas lineage metadata |
+| `atlas_discovery_interval` | `valueInt` | Minimum hours that must pass between consecutive Atlas schema discovery runs for a JDBC connection |
+
+</Accordion>

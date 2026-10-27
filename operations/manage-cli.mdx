@@ -1,0 +1,482 @@
+---
+title: "manage CLI: Admin and Maintenance Operations Reference"
+sidebarTitle: "manage"
+description: "Full reference for the ./manage command — encrypt credentials, discover tables, repair incremental state, generate Airflow DAGs, and run ad-hoc JDBC or Hive queries."
+---
+
+The `./manage` command is the central administration and maintenance tool for DBImport. It does not move production data — instead it manages the metadata, configuration, and operational state that the `./import` and `./export` commands depend on. Use it to onboard new tables, repair stuck pipelines, encrypt secrets, and control Airflow DAG generation.
+
+## Synopsis
+
+```bash
+./manage --<operation> [OPTIONS]
+```
+
+Every invocation requires exactly one primary operation flag. Shared general flags (`-v`, `-y`, `--quiet`, `--help`) apply to all operations.
+
+### General Flags
+
+<ParamField path="-y | --yes" type="flag">
+  Automatically answer "Yes" to all confirmation prompts. Useful for scripted or unattended runs.
+</ParamField>
+
+<ParamField path="-v | --debug" type="flag">
+  Enable verbose debug logging. Passwords are printed in cleartext.
+</ParamField>
+
+<ParamField path="--quiet" type="flag">
+  Suppress the logo and version banner.
+</ParamField>
+
+---
+
+## Connection Management
+
+<AccordionGroup>
+  <Accordion title="--testConnection -a <dbalias>">
+    Attempt a live JDBC connection to the named alias and verify that DBImport can connect successfully. Prints "Connected successfully" on success.
+
+    ```bash
+    ./manage --testConnection -a oracle_prod
+    ```
+
+    <Note>AWS S3 connections are not supported by `--testConnection`.</Note>
+  </Accordion>
+
+  <Accordion title="--encryptCredentials">
+    Encrypt and store a username/password pair for a configured database connection. Overwrites any previously stored credentials. The tool prompts for the connection alias (if not provided via `-a`), then prompts for username and password interactively.
+
+    For AWS S3 connections, the prompts are relabeled to `AccessKeyId` and `SecretAccessKey`.
+
+    Alternatively, pass credentials as JSON via `--jsonInput`:
+
+    ```bash
+    # Interactive mode
+    ./manage --encryptCredentials -a oracle_prod
+
+    # JSON input mode
+    ./manage --encryptCredentials --jsonInput
+    # Enter: {"connection": "oracle_prod", "username": "scott", "password": "tiger"}
+    ```
+  </Accordion>
+
+  <Accordion title="--encryptInstance">
+    Encrypt and store a username/password pair for a remote DBImport instance (used for cluster-to-cluster copy operations). The tool prompts for the instance name, then for username and password.
+
+    ```bash
+    ./manage --encryptInstance
+    ```
+  </Accordion>
+
+  <Accordion title="--encryptString">
+    Encrypt an arbitrary string. The encrypted output can be used as a username or password value in the DBImport configuration file.
+
+    ```bash
+    ./manage --encryptString
+    # Enter: my_secret_value
+    # Output: <encrypted string>
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Table Discovery
+
+Use these operations to populate the `import_tables` and `export_tables` configuration by connecting directly to a source or target database.
+
+<AccordionGroup>
+  <Accordion title="--addImportTable">
+    Connect to a source database and discover all tables and views, then insert them into the `import_tables` configuration. Supports schema and table name filters with wildcard (`*`) matching.
+
+    **Required:**
+
+    <ParamField path="-a | --dbAlias" type="string" required>
+      Source database connection alias.
+    </ParamField>
+    <ParamField path="-h | --hiveDB" type="string" required>
+      Hive database where discovered tables will be configured to land.
+    </ParamField>
+
+    **Optional:**
+
+    <ParamField path="-S | --schema" type="string">
+      Filter by source schema name. Wildcard `*` is supported.
+    </ParamField>
+    <ParamField path="-T | --table" type="string">
+      Filter by table name. Wildcard `*` is supported.
+    </ParamField>
+    <ParamField path="--addSchemaToTable" type="flag">
+      Prefix the Hive table name with the source schema name (e.g., `dbo_orders`).
+    </ParamField>
+    <ParamField path="--addCounterToTable" type="flag">
+      Prefix each Hive table name with an auto-incrementing counter.
+    </ParamField>
+    <ParamField path="--counterStart" type="integer">
+      Starting number for `--addCounterToTable`. Defaults to `1`.
+    </ParamField>
+    <ParamField path="--addCustomText" type="string">
+      Append custom text to each generated Hive table name.
+    </ParamField>
+    <ParamField path="--jsonOutput" type="flag">
+      Print a JSON representation of tables that would be added, without writing to the database.
+    </ParamField>
+
+    ```bash
+    # Add all tables from a schema to a Hive database
+    ./manage --addImportTable -a mssql_crm -h crm_raw -S dbo
+
+    # Preview tables as JSON without writing
+    ./manage --addImportTable -a mssql_crm -h crm_raw -S dbo --jsonOutput
+
+    # Add only tables matching a pattern, prefixing names with the schema
+    ./manage --addImportTable -a oracle_src -h finance_raw -S FIN -T "LEDGER*" --addSchemaToTable
+    ```
+  </Accordion>
+
+  <Accordion title="--addExportTable">
+    Discover tables in Hive and create export configuration entries pointing to a target JDBC system.
+
+    **Required:**
+
+    <ParamField path="-a | --dbAlias" type="string" required>
+      Target JDBC connection alias.
+    </ParamField>
+    <ParamField path="-S | --schema" type="string" required>
+      Schema on the target system where tables will be created.
+    </ParamField>
+
+    **Optional:**
+
+    <ParamField path="-h | --hiveDB" type="string">
+      Filter by Hive database name. Wildcard `*` is supported.
+    </ParamField>
+    <ParamField path="-t | --hiveTable" type="string">
+      Filter by Hive table name. Wildcard `*` is supported.
+    </ParamField>
+    <ParamField path="--addDBToTable" type="flag">
+      Prefix each target table name with the Hive database name.
+    </ParamField>
+    <ParamField path="--addCounterToTable" type="flag">
+      Prefix each target table name with an auto-incrementing counter.
+    </ParamField>
+    <ParamField path="--counterStart" type="integer">
+      Starting number for `--addCounterToTable`. Defaults to `1`.
+    </ParamField>
+    <ParamField path="--addCustomText" type="string">
+      Append custom text to each generated target table name.
+    </ParamField>
+
+    ```bash
+    # Add all Hive tables from a database as export configurations
+    ./manage --addExportTable -a oracle_dw -S DW -h finance_raw
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Import Repair and Reset
+
+These operations fix incremental imports that have fallen out of sync with the source system, or clear stage information from a stuck import run.
+
+<AccordionGroup>
+  <Accordion title="--clearImportStage -h <db> -t <table>">
+    Remove the in-progress stage record for an import. The next run starts from the beginning regardless of where the previous run failed.
+
+    ```bash
+    ./manage --clearImportStage -h my_database -t my_table
+    ```
+  </Accordion>
+
+  <Accordion title="--repairIncrementalImport -h <db> -t <table>">
+    Fix an out-of-sync incremental import. Connects to the Hive table, reads the current maximum value of the incremental column, and sets that as the new starting point for the next import. Clears the stage after repair.
+
+    ```bash
+    ./manage --repairIncrementalImport -h my_database -t my_table
+
+    # Skip confirmation prompt
+    ./manage --repairIncrementalImport -h my_database -t my_table -y
+    ```
+  </Accordion>
+
+  <Accordion title="--repairAllIncrementalImports">
+    Scans all incremental import configurations that have an active entry in `import_stage` and repairs each one — reading the max incremental value from Hive and resetting the bookmark. Prompts for confirmation before running.
+
+    ```bash
+    ./manage --repairAllIncrementalImports
+
+    # Skip confirmation
+    ./manage --repairAllIncrementalImports -y
+    ```
+  </Accordion>
+
+  <Accordion title="--resetIncrementalImport -h <db> -t <table>">
+    Perform a full reset of an incremental import. **Truncates the Hive target table** and clears all incremental state, forcing the next import to perform a complete reload from the source.
+
+    ```bash
+    ./manage --resetIncrementalImport -h my_database -t my_table
+    ```
+
+    <Warning>
+      This operation truncates the Hive target table. All existing data in the table will be deleted.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="--resetCDCImport -h <db> -t <table>">
+    Reset a CDC (Change Data Capture) import that is out of sync with the source system. **Truncates the Hive target table** and clears all CDC state, forcing the next import to perform an initial full load.
+
+    ```bash
+    ./manage --resetCDCImport -h my_database -t my_table
+    ```
+
+    <Warning>
+      This operation truncates the Hive target table. All existing data in the table will be deleted.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Export Repair and Reset
+
+<AccordionGroup>
+  <Accordion title="--clearExportStage -a <conn> -S <schema> -T <table>">
+    Remove the in-progress stage record for an export. The next run starts from the beginning.
+
+    ```bash
+    ./manage --clearExportStage -a oracle_dw -S DW -T CUSTOMER_FACT
+    ```
+  </Accordion>
+
+  <Accordion title="--repairIncrementalExport -a <conn> -S <schema> -T <table>">
+    Fix an out-of-sync incremental export. Reads the current maximum value of the incremental column from the target JDBC table and sets that as the new export bookmark.
+
+    ```bash
+    ./manage --repairIncrementalExport -a oracle_dw -S DW -T ORDERS_INCR -y
+    ```
+  </Accordion>
+
+  <Accordion title="--resetIncrementalExport -a <conn> -S <schema> -T <table>">
+    Reset an incremental export. **Truncates the target JDBC table**, clears the incremental bookmark, and clears the stage — forcing the next export to perform a full load.
+
+    ```bash
+    ./manage --resetIncrementalExport -a oracle_dw -S DW -T ORDERS_INCR
+    ```
+
+    <Warning>
+      This operation truncates the destination JDBC table on the target system.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="--dropExportTable -a <conn> -S <schema> -T <table>">
+    Drop the target table on the destination JDBC system and reset all incremental state. The next export will recreate the table from scratch and perform a full load.
+
+    ```bash
+    ./manage --dropExportTable -a oracle_dw -S DW -T STALE_TABLE
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Airflow DAG Management
+
+<AccordionGroup>
+  <Accordion title="--airflowGenerate">
+    Generate Airflow DAG Python files from the DBImport configuration. If no DAG name is specified and `--airflowAutoDAGonly` is not set, the command prompts before generating all configured DAGs.
+
+    **Optional:**
+
+    <ParamField path="--airflowDAG" type="string">
+      Name of a specific DAG to generate. Cannot be combined with `--airflowAutoDAGonly`.
+    </ParamField>
+    <ParamField path="--airflowAutoDAGonly" type="flag">
+      Generate only DAGs that have `auto_regenerate_dag = 1` in their configuration.
+    </ParamField>
+    <ParamField path="-w | --airflowWriteDAG" type="flag">
+      Write the generated DAG files directly to the configured Airflow DAGs directory. Without this flag, files are written to the temp folder only.
+    </ParamField>
+
+    ```bash
+    # Generate a specific DAG and write to Airflow
+    ./manage --airflowGenerate --airflowDAG=finance_import_dag -w
+
+    # Regenerate only auto-regenerate-enabled DAGs
+    ./manage --airflowGenerate --airflowAutoDAGonly -w
+
+    # Generate all DAGs (prompts for confirmation)
+    ./manage --airflowGenerate -w
+    ```
+  </Accordion>
+
+  <Accordion title="--checkAirflowExecution">
+    Check whether Airflow DAG execution is globally enabled in the DBImport configuration. This is called by the start task of each DBImport-managed Airflow DAG. If the `import_start_disable` flag is set, the check fails and the DAG will not proceed.
+
+    Optionally sends a "started" message to the configured Kafka or REST endpoint when `--airflowDAG` is provided.
+
+    ```bash
+    # Used at the start of an Airflow DAG task
+    ./manage --checkAirflowExecution --airflowDAG=finance_import_dag
+    ```
+  </Accordion>
+
+  <Accordion title="--sendAirflowStopMessage --airflowDAG=<name>">
+    Send a "finished" status message to the configured Kafka and/or REST endpoint for the named Airflow DAG. Called by the final task in a DBImport-managed DAG.
+
+    ```bash
+    ./manage --sendAirflowStopMessage --airflowDAG=finance_import_dag
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Atlas Discovery
+
+<AccordionGroup>
+  <Accordion title="--discoverAtlasRdbms -a <dbalias>">
+    Connect to the specified database and discover all relational objects (tables, views, columns), then create or update the corresponding entities in Apache Atlas.
+
+    ```bash
+    ./manage --discoverAtlasRdbms -a oracle_prod
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Ad-Hoc Query Execution
+
+These operations are intended for troubleshooting and operational tasks.
+
+<AccordionGroup>
+  <Accordion title="--runJDBCQuery=[SQL] -a <dbalias>">
+    Execute a raw SQL statement against the specified JDBC connection and print the results.
+
+    ```bash
+    ./manage --runJDBCQuery="SELECT COUNT(*) FROM orders" -a oracle_prod
+    ```
+  </Accordion>
+
+  <Accordion title="--runHiveQuery=[SQL]">
+    Execute a SQL statement against Hive via the configured Hive connection and print the results.
+
+    ```bash
+    ./manage --runHiveQuery="SELECT COUNT(*) FROM finance_raw.orders"
+    ```
+  </Accordion>
+
+  <Accordion title="--runHiveScript=[FILE]">
+    Execute a SQL script file against Hive using `beeline` as the backend. Optionally specify a Hive database to connect to.
+
+    ```bash
+    ./manage --runHiveScript=/opt/dbimport/scripts/setup.hql -h finance_raw
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## `./copy` Command
+
+The `./copy` command manages cluster-to-cluster data replication and Airflow DAG propagation between DBImport instances. It is separate from `./manage` and has its own operation flag set.
+
+```bash
+./copy --<operation> [OPTIONS]
+```
+
+<CardGroup cols={2}>
+  <Card title="--copyAirflowImportDAG" icon="share-nodes">
+    Copy an Airflow import DAG definition — including all involved tables, databases, and connection aliases — to a remote DBImport instance.
+
+    **Required:** `--airflowDAG=<name>`, `--destination=<dest>`
+
+    **Optional:** `--noSlave` (skip setting up copy-slave relationship), `--setAutoRegenerateDAG`
+  </Card>
+  <Card title="--copyAirflowExportDAG" icon="share-nodes">
+    Copy an Airflow export DAG definition to a remote DBImport instance.
+
+    **Required:** `--airflowDAG=<name>`, `--destination=<dest>`
+
+    **Optional:** `--setAutoRegenerateDAG`
+  </Card>
+  <Card title="--scheduleDAGasyncCopy" icon="clock">
+    Schedule an asynchronous copy of all tables in an Airflow DAG to a destination. Runs regardless of whether a copy definition exists for the table.
+
+    **Required:** `--airflowDAG=<name>`, `--destination=<dest>`
+
+    **Optional:** `--includeIncrImports` (default: full imports only)
+  </Card>
+  <Card title="--scheduleTableAsyncCopy" icon="table">
+    Schedule an asynchronous copy of specific Hive tables (wildcard supported) to a destination.
+
+    **Required:** `-h <db>`, `-t <table>`, `--destination=<dest>`
+  </Card>
+  <Card title="--exportTable" icon="arrow-up-from-bracket">
+    Export a Hive table to a local HDFS path. Optionally concatenate the table before export with `--concatenateTable`.
+
+    **Required:** `-h <db>`, `-t <table>`, `--localHDFSpath=<path>`
+  </Card>
+  <Card title="--importTable" icon="arrow-down-to-bracket">
+    Import a Hive table that was previously exported with `--exportTable`.
+
+    **Required:** `-h <db>`, `-t <table>`, `--localHDFSpath=<path>`
+  </Card>
+  <Card title="--copyTableToCluster" icon="server">
+    DistCP a Hive table's HDFS files to a remote cluster.
+
+    **Required:** `-h <db>`, `-t <table>`, `--remoteInstance=<inst>`, `--localHDFSpath=<path>`, `--remoteHDFSpath=<path>`
+  </Card>
+  <Card title="--copyTableFromCluster" icon="server">
+    DistCP a Hive table's HDFS files from a remote cluster.
+
+    **Required:** `-h <db>`, `-t <table>`, `--remoteInstance=<inst>`, `--localHDFSpath=<path>`, `--remoteHDFSpath=<path>`
+  </Card>
+</CardGroup>
+
+```bash
+# Copy a DAG to a remote DBImport instance
+./copy --copyAirflowImportDAG --airflowDAG=finance_dag --destination=cluster_b
+
+# Schedule an async copy of all tables in a DAG
+./copy --scheduleDAGasyncCopy --airflowDAG=finance_dag --destination=cluster_b
+
+# Export a Hive table to HDFS for manual DistCP
+./copy --exportTable -h finance_raw -t orders --localHDFSpath=/tmp/export
+```
+
+---
+
+## `./deploy` Command
+
+The `./deploy` command pushes DAG definitions and their associated table configurations to a target DBImport instance. Unlike `./copy`, which works with copy destinations, `./deploy` targets a named DBImport instance directly and verifies schema compatibility before deploying.
+
+```bash
+./deploy --<operation> --airflowDAG=<name> --deployTarget=<instance>
+```
+
+<CardGroup cols={2}>
+  <Card title="--deployAirflowImportDAG" icon="rocket">
+    Deploy an import DAG and all its table/connection configurations to the named DBImport instance. Verifies remote schema compatibility before writing. Existing definitions are updated in place; tables present on the remote but absent locally are not deleted.
+
+    **Required:** `--airflowDAG=<name>`, `--deployTarget=<instance>`
+  </Card>
+  <Card title="--deployAirflowExportDAG" icon="rocket">
+    Deploy an export DAG and all its table/connection configurations to the named DBImport instance.
+
+    **Required:** `--airflowDAG=<name>`, `--deployTarget=<instance>`
+  </Card>
+</CardGroup>
+
+```bash
+# Deploy an import DAG to a production DBImport instance
+./deploy --deployAirflowImportDAG --airflowDAG=finance_dag --deployTarget=prod_instance
+
+# Deploy an export DAG
+./deploy --deployAirflowExportDAG --airflowDAG=dw_export_dag --deployTarget=prod_instance
+```
+
+<Tip>
+  Use `./manage --encryptInstance` to store credentials for the target DBImport instance before running `./deploy`. Without valid credentials, the remote API call will fail.
+</Tip>

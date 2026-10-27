@@ -1,0 +1,211 @@
+---
+title: "import CLI: Run and Control Table Import Operations"
+sidebarTitle: "import"
+description: "Complete reference for the ./import command — run full, incremental, or phased imports and invoke individual pipeline functions for debugging or recovery."
+---
+
+The `./import` command is the primary entry point for loading data from a configured source database into Hive. A single invocation can run the entire pipeline — Import Phase, Copy Phase, and ETL Phase — or any individual phase or function in isolation, making it equally suited to scheduled production runs and targeted debugging.
+
+## Synopsis
+
+```bash
+./import -h <hive_db> -t <hive_table> [OPTIONS]
+```
+
+Both `-h`/`-d`/`--Hive_DB` and `-t`/`--Hive_Table` are required for every invocation. When no phase flag is given, all three phases are executed in sequence.
+
+## Flags Reference
+
+<ParamField path="-d | -h | --Hive_DB" type="string" required>
+  Target Hive database that contains (or will contain) the destination table. All three forms are equivalent.
+</ParamField>
+
+<ParamField path="-t | --Hive_Table" type="string" required>
+  Target Hive table to import into.
+</ParamField>
+
+<ParamField path="-I | -1" type="flag">
+  Execute the **Import Phase only** — fetch data from the source system via Sqoop or Spark and land it on HDFS. Does not run Copy or ETL phases. If the Import Phase has already been completed in a previous run, a warning is printed and the command exits cleanly.
+</ParamField>
+
+<ParamField path="-C" type="flag">
+  Execute the **Copy Phase only** — distribute the imported HDFS files to configured copy destinations. Only runs after a completed Import Phase stage. If the import stage is `0` (no previous run), Copy Phase executes from a clean slate and keeps stage state in memory only.
+</ParamField>
+
+<ParamField path="-E | -2" type="flag">
+  Execute the **ETL Phase only** — create or update Hive target tables, perform merge/insert operations, run compaction, and invalidate Impala. Does not re-run the source-side import.
+</ParamField>
+
+<ParamField path="-m | --metaDataOnly" type="flag">
+  Fetch column schema, constraints, and row counts from the source system without importing any data. Equivalent to running `-f getSourceTableSchema` followed by validation. Internally sets `runOnlyFunction = "metaDataOnly"`.
+</ParamField>
+
+<ParamField path="--skipImportData" type="flag">
+  Skip the Sqoop/Spark data transfer step. Useful when raw import files are already present on HDFS and only the Hive table structure needs to be recreated.
+</ParamField>
+
+<ParamField path="--dropTargetTable" type="flag">
+  Drop and fully recreate the Hive target table before loading data. Required when column type changes in the source cannot be applied to an existing table through `ALTER TABLE`.
+</ParamField>
+
+<ParamField path="--ignoreTime" type="flag">
+  Override the configured start/stop time window for the JDBC connection and run the import regardless of the current time.
+</ParamField>
+
+<ParamField path="--resetStage" type="flag">
+  Force the import to start from stage `0`, discarding any in-progress stage information. Equivalent to clearing a stuck import before re-running.
+</ParamField>
+
+<ParamField path="-f | --function" type="string">
+  Execute a single named pipeline function and exit. Stage state is held in memory only — the on-disk stage record is not modified. Intended for debugging and targeted recovery.
+
+  See [Runnable Functions](#runnable-functions) for the full list of valid values.
+
+  <Warning>
+    Using `-f` bypasses the normal stage-checking logic. Run with caution in production environments to avoid inconsistent state.
+  </Warning>
+</ParamField>
+
+<ParamField path="-v | --debug" type="flag">
+  Enable verbose debug logging to stdout. Passwords are printed in cleartext when this flag is active.
+</ParamField>
+
+<ParamField path="-V | --version" type="flag">
+  Print the DBImport version string and exit.
+</ParamField>
+
+---
+
+## Runnable Functions
+
+When `-f`/`--function` is supplied, only that function executes. The following function names are valid:
+
+<AccordionGroup>
+  <Accordion title="Import Phase functions">
+    | Function | Description |
+    |---|---|
+    | `getSourceTableSchema` | Introspect column definitions, primary keys, and foreign keys from the source system. |
+    | `getSourceTableRowCount` | Fetch the row count from the source table for validation. |
+    | `importData` | Execute the Sqoop or Spark import job to transfer rows from the source to HDFS. (`sqoop` is accepted as a deprecated alias.) |
+    | `updateAtlas` | Push schema and lineage metadata to Apache Atlas. |
+  </Accordion>
+
+  <Accordion title="ETL Phase functions">
+    | Function | Description |
+    |---|---|
+    | `createImportTable` | Create or update the external Hive import staging table pointing at the raw HDFS files. |
+    | `getImportTableRowCount` | Count rows in the Hive import staging table for validation. |
+    | `getTargetTableRowCount` | Count rows in the Hive target table for post-merge validation. |
+    | `createTargetTable` | Create or `ALTER` the Hive target table to match the current source schema. Respects `--dropTargetTable`. |
+    | `createHistoryTable` | Create or update the Hive history/audit table used by merge-history ETL phases. |
+    | `createDeleteTable` | Create or update the Hive delete-tracking table used by CDC and Change Tracking imports. |
+    | `removeHiveLocks` | Release any Hive locks on the target table before a merge or truncate-insert. |
+    | `truncateTargetTable` | Truncate the Hive target table (used internally during full reloads). |
+    | `loadDataFromImportTable` | Insert data from the import staging table into the target table (truncate-insert pattern). |
+    | `mergeTable` | Run the Hive merge statement to upsert rows from the import table into the target table. |
+    | `createStatistics` | Compute and persist import-run statistics. |
+  </Accordion>
+
+  <Accordion title="Copy Phase functions">
+    | Function | Description |
+    |---|---|
+    | `copyFiles` | Distribute imported HDFS data files to all configured copy destinations. |
+    | `copySchema` | Replicate the Hive import schema definition to copy destinations. |
+  </Accordion>
+
+  <Accordion title="Utility functions">
+    | Function | Description |
+    |---|---|
+    | `compaction` | Trigger a Hive compaction on the target table (applicable to ACID/transactional tables). |
+    | `invalidateImpala` | Issue an `INVALIDATE METADATA` statement against the target table in Impala. |
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Pipeline Phases
+
+Understanding the three phases helps you choose the right flags for partial runs and recovery.
+
+<CardGroup cols={3}>
+  <Card title="Import Phase" icon="cloud-arrow-down">
+    Connects to the source JDBC database (or Mongo), runs Sqoop or Spark to extract rows, validates row counts, and writes raw data to HDFS. Stages `1000`–`1999`.
+  </Card>
+  <Card title="Copy Phase" icon="copy">
+    Distributes the HDFS files and schema to other configured DBImport instances or clusters. Only runs when copy destinations are configured. Stages `2000`–`2099`.
+  </Card>
+  <Card title="ETL Phase" icon="table">
+    Creates Hive staging/target/history tables, executes the merge or insert, runs compaction, invalidates Impala, and records statistics. Stages `3000`–`9999`.
+  </Card>
+</CardGroup>
+
+---
+
+## Usage Examples
+
+```bash
+# Run a full import (all phases)
+./import -h my_database -t my_table
+
+# Run import phase only — fetch data but defer ETL
+./import -h my_database -t my_table -I
+
+# Run ETL phase only — after a successful import phase
+./import -h my_database -t my_table -E
+
+# Run copy phase only — re-distribute files without re-importing
+./import -h my_database -t my_table -C
+
+# Fetch schema metadata only, no data transfer
+./import -h my_database -t my_table -m
+
+# Skip the Sqoop/Spark step; files already exist on HDFS
+./import -h my_database -t my_table --skipImportData
+
+# Force a table type change by dropping and recreating target
+./import -h my_database -t my_table --dropTargetTable
+
+# Run outside the configured time window
+./import -h my_database -t my_table --ignoreTime
+
+# Restart a stuck import from the beginning
+./import -h my_database -t my_table --resetStage
+
+# Re-run only the Atlas metadata update
+./import -h my_database -t my_table -f updateAtlas
+
+# Re-run only the Hive merge step
+./import -h my_database -t my_table -f mergeTable
+
+# Invalidate Impala cache for a specific table
+./import -h my_database -t my_table -f invalidateImpala
+
+# Enable debug logging (passwords printed in cleartext)
+./import -h my_database -t my_table -v
+```
+
+---
+
+## Recovery Scenarios
+
+<AccordionGroup>
+  <Accordion title="Import failed mid-Sqoop run">
+    DBImport automatically saves a retry attempt and will restart Sqoop from a safe point. Simply re-run with the same flags — no manual reset needed unless you want to force a full restart with `--resetStage`.
+  </Accordion>
+
+  <Accordion title="ETL phase stuck, import data is good">
+    Run with `-E` to execute only the ETL Phase. DBImport will pick up from the last completed ETL stage.
+  </Accordion>
+
+  <Accordion title="Target table type change required">
+    If a column type change is incompatible with an `ALTER TABLE`, add `--dropTargetTable` to your next run. The table will be dropped and recreated before data is loaded.
+  </Accordion>
+
+  <Accordion title="Import disabled by configuration">
+    If the `import_start_disable` configuration key is set, imports will fail with an error. Use `--ignoreDisabled` (internal/Airflow flag) to bypass this check, or re-enable imports via the DBImport configuration.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  Stage `9999` indicates a successfully completed import. Stage `0` means no import has ever run or the stage was explicitly reset. Values between `1000` and `3999` reflect in-progress or failed stages within each phase.
+</Note>

@@ -1,0 +1,153 @@
+---
+title: "How DBImport Works: ELT Architecture and Data Flow"
+sidebarTitle: "Overview"
+description: "Understand DBImport's ELT pipeline: six-step import flow, table types, import and ETL phases, validation methods, and AWS cloud support."
+---
+
+DBImport is an ELT tool that automates the ingestion of data from JDBC-connected relational databases into a data lakehouse such as Cloudera Data Platform or AWS Lake Formation. Each table is treated as an independent micro-batch — DBImport reads the source schema on every run, loads data through Sqoop or Spark, validates row counts, and then runs an ETL phase in Hive or Spark to land data in the final target table. Apache Airflow handles scheduling and dependency management, while Apache Atlas provides data lineage tracking.
+
+## The Six-Step Import Flow
+
+Every import in DBImport follows the same high-level pipeline, regardless of which import method or ETL engine is selected.
+
+<Steps>
+  <Step title="Fetch Source Schema">
+    DBImport connects to the source database and reads column names, data types, comments, indexes, primary keys, and foreign keys. This schema snapshot is saved to the DBImport configuration database and is used to keep Import, Target, and History tables synchronized with the source automatically.
+  </Step>
+  <Step title="Load to Import Table">
+    The raw data is extracted from the source system using Sqoop or Spark and written to the **Import table** — a staging area on HDFS or S3. The file format depends on the ETL engine: Parquet (Sqoop + Hive), ORC (Spark + Hive), or Iceberg (Spark ETL engine).
+  </Step>
+  <Step title="Validate Against Source">
+    DBImport compares the number of rows extracted against the number of rows in the source system. For incremental imports, only the rows within the incremental window are compared. A configurable tolerance (`validate_diff_allowed`) determines how many rows of difference are acceptable.
+  </Step>
+  <Step title="Load to Target Table">
+    Once the Import table passes validation, the ETL phase runs. Data is loaded from the Import table into the **Target table** — the end-user-facing table — using the configured ETL phase (truncate-insert, insert, merge, or merge with history audit).
+  </Step>
+  <Step title="Validate Target Table">
+    A second validation runs against the Target table to confirm the ETL phase completed correctly. This can be a full row count comparison or an incremental row count comparison, depending on configuration.
+  </Step>
+  <Step title="Load History Audit Table (optional)">
+    If a History Audit table is configured, DBImport identifies rows that were inserted, updated, or deleted during the import and writes a change log to the **History Audit table**. This step only runs when the ETL phase is `merge_history_audit`.
+  </Step>
+</Steps>
+
+## Table Types
+
+DBImport uses several distinct table types throughout the pipeline. Each serves a specific role and is maintained automatically as the source schema evolves.
+
+| Table Type | Purpose | File Format |
+|---|---|---|
+| **Import table** | Staging area where raw source data lands first. Created as an external Hive table pointing to the Parquet/ORC/Iceberg files written by Sqoop or Spark. | Parquet (Sqoop + Hive ETL), ORC (Spark + Hive ETL), Iceberg (Spark ETL engine) |
+| **Target table** | The production table that end-users query. Loaded from the Import table during the ETL phase. | ORC (Hive ETL engine), Iceberg (Spark ETL engine) |
+| **History Audit table** | An append-only change log derived from the Target table. Records inserts, updates, and deletes between consecutive imports. Format follows the same rules as the Target table. | ORC or Iceberg |
+| **Delete table** | Internal staging table used to track deleted rows during merge operations. Contains only primary key columns. Not intended for end-user access. | Follows Target table format |
+| **Temporary Export table** | Used during exports to stage data before the Sqoop export job runs. Required for all incremental exports and some full exports. | Hive-managed |
+
+<Note>
+  When Spark is selected as the ETL engine (available from DBImport v0.8), **all** tables use Iceberg format. The Import table format changes as well — Spark writes Iceberg directly rather than Parquet or ORC.
+</Note>
+
+## Import Phase Types
+
+The import phase controls how data is read from the source system.
+
+| Import Phase | Description | Delete Detection |
+|---|---|---|
+| `full` | Reads the entire source table on every run. | No |
+| `incr` | Reads only new rows using an auto-increment integer column (Append mode) or a timestamp/date column (Last Modified mode). | No |
+| `oracle_flashback` | Uses Oracle Flashback Version Query (`VERSION BETWEEN SCN`) to read only changed rows since the last import SCN. Requires Sqoop. | Yes |
+| `mssql_change_tracking` | Uses Microsoft SQL Server Change Tracking to read only changed rows. Requires Change Tracking to be enabled on the source table and database. Requires Spark. | Yes |
+
+## ETL Phase Types
+
+The ETL phase controls how data from the Import table is applied to the Target table.
+
+| ETL Phase | What It Does | Tracks Deletes | Creates History |
+|---|---|---|---|
+| `truncate_insert` | Truncates the Target table, then inserts all rows from the Import table. Most common for full imports. | No | No |
+| `insert` | Inserts rows from the Import table into the Target table without truncating. Risk of duplicates if used with a full import. | No | No |
+| `merge` | Performs a PK-based merge: updates existing rows when any column value changes, inserts missing rows. Adds change-tracking metadata columns to the Target table. | For CDC methods only | No |
+| `merge_history_audit` | Same as `merge`, but also writes changed and deleted rows into the History Audit table for full audit tracking. | For CDC methods only | Yes |
+| `none` | Creates the Import table only. No ETL is performed. Use when a custom downstream ETL process will handle the data. | No | No |
+| `external` | Similar to `none` — hands off to an external process after the Import table is populated. | No | No |
+
+### Valid Import Phase / ETL Phase Combinations
+
+Not all combinations are supported. The table below shows which pairings are valid.
+
+| Import Phase | Valid ETL Phases |
+|---|---|
+| `full` | `truncate_insert`, `insert`, `merge`, `merge_history_audit`, `none` |
+| `incr` | `insert`, `merge`, `merge_history_audit` |
+| `oracle_flashback` | `merge`, `merge_history_audit` |
+| `mssql_change_tracking` | `merge`, `merge_history_audit` |
+
+## ETL Engines
+
+DBImport supports two ETL engines that determine how data is moved from the Import table to the Target table.
+
+<CardGroup cols={2}>
+  <Card title="Hive (Default)" icon="database">
+    After Sqoop or Spark completes the ingestion, DBImport opens a Hive session and executes the ETL queries directly in Hive. The Import table is an external Hive table pointing at Parquet or ORC files. Target and History tables use ORC format.
+  </Card>
+  <Card title="Spark (v0.8+)" icon="bolt">
+    Spark acts as both the ingestion engine and the ETL engine. Since the data is already in memory, this reduces I/O and eliminates the need for a separate Hive session. Using Spark as the ETL engine **forces Iceberg** as the table format for all tables.
+  </Card>
+</CardGroup>
+
+<Warning>
+  On CDP Private Cloud v7.1.8, Iceberg support is not enabled out of the box. Additional installation steps are required before using Spark as the ETL engine. See the Installation guide for details.
+</Warning>
+
+## Import Validation
+
+DBImport runs up to three validation checkpoints during each import to ensure data integrity.
+
+### Row Count Validation
+
+Row count validation compares the number of rows between two tables. A small tolerance is applied automatically when `validate_diff_allowed` is set to `-1` (the default):
+
+```
+diffAllowed = source_rowcount × (50 / (100 × √source_rowcount))
+```
+
+This formula produces a larger absolute tolerance for large tables while still being proportionally tight. You can override the automatic calculation by setting `validate_diff_allowed` to a specific positive integer in the `import_tables` table.
+
+| Checkpoint | What Is Compared | Incremental Scope |
+|---|---|---|
+| **After Sqoop/Spark** | Rows reported by Sqoop/Spark vs. source row count | Incremental window only |
+| **After Import table created** | Import table (Parquet/ORC files) vs. source row count | Incremental window only |
+| **After Target table loaded** | Target table vs. source row count | Configurable: full or incremental |
+
+### Custom SQL Validation
+
+When row count is not sufficient, you can configure a custom SQL query. DBImport executes the query on both the source system and the Hive table, converts both results to JSON, and compares them exactly. The first checkpoint (Sqoop/Spark vs. source) is skipped for custom SQL — it is only applied at the Import table and Target table checkpoints.
+
+<Note>
+  Custom SQL validation results are stored as JSON and must match exactly. The JSON document is limited to 512 bytes. Column names are excluded from the comparison — only values are compared.
+</Note>
+
+## AWS Support
+
+DBImport has full support for running on AWS. The following AWS services are used in a native AWS deployment.
+
+<CardGroup cols={2}>
+  <Card title="Amazon EMR" icon="server">
+    DBImport runs on an EMR cluster. Spark is the only supported ingestion and ETL engine in this environment, which means all tables use Iceberg format.
+  </Card>
+  <Card title="AWS Glue Catalog" icon="folder-open">
+    Glue Catalog replaces the Hive Metastore as the catalog for all databases and tables created by DBImport.
+  </Card>
+  <Card title="Amazon RDS (MariaDB/MySQL)" icon="circle-nodes">
+    The DBImport configuration database (which stores table definitions, job state, and credentials) runs on Amazon RDS using MariaDB or MySQL.
+  </Card>
+  <Card title="AWS Secrets Manager" icon="lock">
+    Credentials for the configuration database and all JDBC connections can be stored in and retrieved from AWS Secrets Manager.
+  </Card>
+  <Card title="Amazon MWAA" icon="calendar">
+    The managed Apache Airflow service (MWAA) is supported for scheduling. The `manage` command writes Airflow DAGs directly to the S3 bucket used by MWAA. DAGs use SSM Send-Command to trigger tasks on the primary EMR node.
+  </Card>
+  <Card title="Amazon S3" icon="cloud">
+    Raw data files are stored in S3. Exports from Hive back to S3 are also supported using the `s3a://` URL format with Parquet as the output format.
+  </Card>
+</CardGroup>

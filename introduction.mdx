@@ -1,0 +1,118 @@
+---
+title: "DBImport: Automated ELT Ingestion for Hadoop and Hive"
+sidebarTitle: "Introduction"
+description: "DBImport is an ELT tool that automates schema-aware data ingestion from relational databases into Hadoop and Hive data lakehouses."
+---
+
+DBImport is an open-source ELT ingestion platform that automatically loads data from JDBC-connected relational databases into a data lakehouse such as Cloudera Data Platform (CDP), AWS Lake Formation, or any Hadoop-compatible environment. It eliminates the toil of hand-crafting Sqoop scripts and manually tracking schema changes by centralising all import and export definitions in a MySQL configuration database and executing them as individually scheduled micro-batches through Apache Airflow.
+
+## The Problem DBImport Solves
+
+Traditional data ingestion into Hadoop is fragile. Engineers write bespoke Sqoop commands for each table, those scripts break silently when the source schema changes, and validating that the right number of rows arrived requires even more custom code. DBImport addresses each of these pain points directly:
+
+- **Schema drift handled automatically.** Before every import, DBImport reads the source table's column names, types, primary keys, and comments, then alters the Hive target table to match. Added columns appear, changed types are cast — no manual ALTER TABLE required.
+- **Three-stage row-count validation.** After every import, DBImport compares row counts at the Sqoop/Spark boundary, at the Import table stage, and again at the Target table. Any discrepancy fails the job before bad data reaches consumers.
+- **Airflow-native scheduling.** DBImport generates Apache Airflow DAGs automatically from table definitions stored in its configuration database. Tasks run in parallel up to Airflow's configured concurrency limit with correct dependency ordering.
+- **Dual ingestion engines.** Sqoop and Spark are both supported and are selectable per table, so you can use Sqoop for simple full-loads while Spark handles transactional Hive 3.x tables or Iceberg targets.
+
+## High-Level Architecture
+
+Every DBImport import follows the same path. DBImport reads configuration from a central **MySQL configuration database**, connects to the source system over JDBC, and lands data in stages before promoting it to the end-user target table.
+
+```
+Source DB (Oracle / MSSQL / MySQL / …)
+        │
+        │  JDBC
+        ▼
+   Sqoop or Spark  ──► Import Table (Parquet / ORC / Iceberg on HDFS/S3)
+                              │
+                              │  Hive or Spark ETL Engine
+                              ▼
+                         Target Table (ORC / Iceberg)
+                              │
+                              │  (optional)
+                              ▼
+                       History Audit Table
+```
+
+The **MySQL configuration database** stores every connection string, import definition, column override, and Airflow DAG mapping. The `./import` binary reads this database at runtime to know what to do, which means changing import behaviour requires only a database update — not a code change.
+
+## Supported Source Systems
+
+DBImport connects to any database that exposes a JDBC driver. The following source systems are tested and supported out of the box.
+
+| Source System | Notes |
+|---|---|
+| Oracle | Full and incremental imports; Change Data Tracking |
+| Microsoft SQL Server | Full and incremental imports; Change Data Tracking |
+| MySQL / MariaDB | Full and incremental imports |
+| IBM DB2 UDB | Full and incremental imports |
+| IBM DB2 AS/400 | Full and incremental imports |
+| PostgreSQL | Full and incremental imports |
+| Snowflake | Full and incremental imports |
+| MongoDB | Document-to-row flattening |
+| Progress / OpenEdge | Full and incremental imports |
+| AWS S3 | Object-store source and export target |
+
+## Import Methods
+
+DBImport provides three import strategies selectable per table.
+
+<CardGroup cols={3}>
+  <Card title="Full Import" icon="arrow-down-to-line">
+    Truncates the target table and reloads the entire source table on every run. Simple and reliable for small, slowly changing datasets.
+  </Card>
+  <Card title="Incremental Import" icon="layer-plus">
+    Reads only rows added or changed since the last import, based on a monotonically increasing column. Best for append-only fact tables.
+  </Card>
+  <Card title="Change Data Tracking" icon="code-compare">
+    Reads only changed rows via SQL queries — no transaction log access needed. Captures inserts and updates for tables that change in place.
+  </Card>
+</CardGroup>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Automatic Schema Evolution" icon="wand-magic-sparkles">
+    Column additions, type changes, and comment updates in the source system are automatically propagated to Import, Target, and History Audit tables in Hive on every run.
+  </Card>
+  <Card title="Three-Stage Validation" icon="shield-check">
+    Row counts are validated after Sqoop/Spark ingest, after the Import table is written, and again after the Target table is loaded. Custom SQL validation is also supported.
+  </Card>
+  <Card title="Airflow DAG Generation" icon="calendar-check">
+    Insert a row in `airflow_import_dags` and run `./manage --airflowGenerate` to produce a fully wired Airflow DAG with per-table tasks and correct parallelism.
+  </Card>
+  <Card title="History Audit Tables" icon="clock-rotate-left">
+    Optionally maintain a row-level change log showing exactly which column values changed between imports, built from a diff of the Target table across runs.
+  </Card>
+  <Card title="Dual Ingestion Engines" icon="bolt">
+    Choose Sqoop or Spark per table. Spark is required for Hive 3.x transactional tables and Iceberg targets; it also serves as the ETL engine for in-memory transforms.
+  </Card>
+  <Card title="Apache Atlas Lineage" icon="diagram-project">
+    DBImport registers every import as a lineage process in Apache Atlas, giving data consumers a clear view of where each Hive table's data originated.
+  </Card>
+  <Card title="AWS-Native Deployment" icon="aws">
+    Runs on EMR with Glue Catalog, AWS Secrets Manager for credentials, and AWS MWAA for scheduling. Iceberg is the default table format in this mode.
+  </Card>
+  <Card title="Credential Encryption" icon="lock">
+    All JDBC usernames and passwords are encrypted with an RSA-8192 public/private keypair before being stored in the configuration database.
+  </Card>
+</CardGroup>
+
+## Export Support
+
+DBImport also exports data from Hive back to relational databases. Full export rewrites the entire target table; incremental export pushes only changed rows using a temporary staging table. Spark is required for exports against Hive 3.x transactional tables.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Import the DBImport configuration database itself into Hive in five steps — the fastest way to see DBImport working end-to-end.
+  </Card>
+  <Card title="Requirements" icon="list-check" href="/requirements">
+    Review Python version, Hadoop, Kerberos, and MySQL prerequisites before installing.
+  </Card>
+  <Card title="Installation" icon="screwdriver-wrench" href="/installation">
+    Unpack the tarball, configure `dbimport.cfg`, generate SSL keys, and create the configuration schema.
+  </Card>
+</CardGroup>

@@ -1,0 +1,460 @@
+---
+title: "REST API: Global Configuration Endpoints"
+sidebarTitle: "Config"
+description: "Reference for the /config REST API endpoints — retrieve and update global DBImport configuration keys and JDBC driver registrations."
+---
+
+The configuration endpoints expose the global key/value settings stored in the DBImport configuration database. These keys control every subsystem — Airflow integration, HDFS paths, Hive behaviour, import/export session limits, Kafka event streaming, REST server settings, and more. JDBC driver registrations (classpath and driver class per database type) are managed separately via the JDBC driver endpoints. All endpoints require a valid Bearer token.
+
+<Note>
+  The keys `restserver_admin_user`, `restserver_authentication_method`, and `restserver_token_ttl` are only visible to and editable by the configured admin user. The `restserver_secret_key` is never exposed via the API.
+</Note>
+
+---
+
+## GET /config/getJDBCdrivers
+
+Returns the full list of JDBC driver registrations. Each entry maps a `databaseType` / `version` combination to a driver class name and classpath. These entries are used by `POST /connection/generateJDBCconnectionString` to validate database type and version combinations.
+
+**Authentication:** Bearer token required
+
+### Response Fields
+
+Returns an array of JDBC driver objects:
+
+<ResponseField name="databaseType" type="string" required>
+  Database platform label (e.g. `Oracle`, `MySQL`, `SQL Server`, `PostgreSQL`, `Snowflake`, `DB2 UDB`, `DB2 AS400`).
+</ResponseField>
+
+<ResponseField name="version" type="string" required>
+  Driver version label (e.g. `default`, `jTDS`).
+</ResponseField>
+
+<ResponseField name="driver" type="string" required>
+  Fully-qualified Java driver class name (e.g. `oracle.jdbc.driver.OracleDriver`).
+</ResponseField>
+
+<ResponseField name="classpath" type="string" required>
+  Filesystem path to the JDBC driver JAR file.
+</ResponseField>
+
+```json title="Example response"
+[
+  {
+    "databaseType": "Oracle",
+    "version": "default",
+    "driver": "oracle.jdbc.driver.OracleDriver",
+    "classpath": "/opt/drivers/ojdbc8.jar"
+  },
+  {
+    "databaseType": "SQL Server",
+    "version": "default",
+    "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver",
+    "classpath": "/opt/drivers/mssql-jdbc.jar"
+  }
+]
+```
+
+---
+
+## POST /config/updateJDBCdriver
+
+Updates the driver class name and classpath for an existing `databaseType` / `version` entry. The combination must already exist in the database — this endpoint updates only; it does not create new driver records.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="databaseType" type="string" required>
+  Database platform identifier. Must match an existing entry.
+</ParamField>
+
+<ParamField body="version" type="string" required>
+  Driver version label. Must match an existing entry alongside `databaseType`.
+</ParamField>
+
+<ParamField body="driver" type="string" required>
+  Updated Java driver class name.
+</ParamField>
+
+<ParamField body="classpath" type="string" required>
+  Updated path to the JDBC driver JAR.
+</ParamField>
+
+### Response
+
+Returns `"ok"` with HTTP `200` on success. Returns HTTP `400` with an error message if the `databaseType`/`version` combination is not a supported entry.
+
+---
+
+## GET /config/getConfig
+
+Returns all global DBImport configuration keys and their current values as a single flat JSON object. Keys that are `null` have not been customised from the system default.
+
+**Authentication:** Bearer token required
+
+### Response Fields
+
+The response is a flat object keyed by configuration key name. The complete set of keys is documented below by category.
+
+<Accordion title="Airflow Settings">
+
+<ResponseField name="airflow_dag_directory" type="string">
+  Filesystem path where generated Airflow DAG Python files are written.
+</ResponseField>
+
+<ResponseField name="airflow_dag_staging_directory" type="string">
+  Staging directory used during DAG file generation before atomic move.
+</ResponseField>
+
+<ResponseField name="airflow_dbimport_commandpath" type="string">
+  Path to the DBImport binary invoked by Airflow tasks.
+</ResponseField>
+
+<ResponseField name="airflow_major_version" type="integer">
+  Airflow major version in use: `1` or `2`.
+</ResponseField>
+
+<ResponseField name="airflow_url" type="string">
+  Base URL of the Airflow web UI (used to build `airflowLink` fields).
+</ResponseField>
+
+<ResponseField name="airflow_disable" type="boolean">
+  When `true`, all Airflow-related operations are disabled globally.
+</ResponseField>
+
+<ResponseField name="airflow_default_pool_size" type="integer">
+  Default slot count for auto-created Airflow pools.
+</ResponseField>
+
+<ResponseField name="airflow_create_pool_with_task" type="boolean">
+  Whether a pool is automatically created when a task references a new pool name.
+</ResponseField>
+
+<ResponseField name="airflow_sudo_user" type="string">
+  Default Linux user for `sudo`-based task execution.
+</ResponseField>
+
+<ResponseField name="airflow_dummy_task_queue" type="string">
+  Airflow queue assigned to dummy/sensor tasks.
+</ResponseField>
+
+<ResponseField name="airflow_aws_instanceids" type="string">
+  Comma-separated EC2 instance IDs for AWS-based pool-to-instance mapping.
+</ResponseField>
+
+<ResponseField name="airflow_aws_pool_to_instanceid" type="boolean">
+  Whether Airflow pools are mapped to specific AWS EC2 instance IDs.
+</ResponseField>
+
+<ResponseField name="airflow_dag_file_group" type="string">
+  Linux group ownership applied to generated DAG files.
+</ResponseField>
+
+<ResponseField name="airflow_dag_file_permission" type="string">
+  File permission octal string applied to generated DAG files (e.g. `644`).
+</ResponseField>
+
+<ResponseField name="post_airflow_dag_operations" type="boolean">
+  Whether DAG operations are posted as events after execution.
+</ResponseField>
+
+</Accordion>
+
+<Accordion title="Import Settings">
+
+<ResponseField name="import_default_sessions" type="integer">
+  Default number of parallel Sqoop/Spark sessions for import jobs.
+</ResponseField>
+
+<ResponseField name="import_max_sessions" type="integer">
+  Maximum number of parallel sessions permitted for any single import.
+</ResponseField>
+
+<ResponseField name="import_stage_disable" type="boolean">
+  When `true`, the staging phase of imports is disabled globally.
+</ResponseField>
+
+<ResponseField name="import_start_disable" type="boolean">
+  When `true`, no new import jobs are allowed to start.
+</ResponseField>
+
+<ResponseField name="import_process_empty" type="boolean">
+  Whether tables with zero source rows are still processed through the ETL phase.
+</ResponseField>
+
+<ResponseField name="import_staging_database" type="string">
+  Hive database used for staging tables during import.
+</ResponseField>
+
+<ResponseField name="import_staging_table" type="string">
+  Hive table name used for the import staging area.
+</ResponseField>
+
+<ResponseField name="import_work_database" type="string">
+  Hive database used for intermediate work tables.
+</ResponseField>
+
+<ResponseField name="import_work_table" type="string">
+  Hive table name used as a work area.
+</ResponseField>
+
+<ResponseField name="import_history_database" type="string">
+  Hive database used to persist import history audit records.
+</ResponseField>
+
+<ResponseField name="import_history_table" type="string">
+  Hive table used to persist import history audit records.
+</ResponseField>
+
+<ResponseField name="import_columnname_insert" type="string">
+  Name of the Hive column tracking insert events in merge/history tables.
+</ResponseField>
+
+<ResponseField name="import_columnname_update" type="string">
+  Name of the column tracking update events.
+</ResponseField>
+
+<ResponseField name="import_columnname_delete" type="string">
+  Name of the column tracking delete events (soft-delete).
+</ResponseField>
+
+<ResponseField name="import_columnname_iud" type="string">
+  Name of the combined insert/update/delete flag column.
+</ResponseField>
+
+<ResponseField name="import_columnname_histtime" type="string">
+  Name of the history timestamp column.
+</ResponseField>
+
+<ResponseField name="import_columnname_import" type="string">
+  Name of the import timestamp column.
+</ResponseField>
+
+<ResponseField name="import_columnname_source" type="string">
+  Name of the column that records the source system identifier.
+</ResponseField>
+
+</Accordion>
+
+<Accordion title="Export Settings">
+
+<ResponseField name="export_default_sessions" type="integer">
+  Default parallel session count for export jobs.
+</ResponseField>
+
+<ResponseField name="export_max_sessions" type="integer">
+  Maximum parallel sessions for any single export job.
+</ResponseField>
+
+<ResponseField name="export_stage_disable" type="boolean">
+  When `true`, the staging phase of exports is disabled globally.
+</ResponseField>
+
+<ResponseField name="export_start_disable" type="boolean">
+  When `true`, no new export jobs are allowed to start.
+</ResponseField>
+
+<ResponseField name="export_staging_database" type="string">
+  Hive database used for export staging tables.
+</ResponseField>
+
+</Accordion>
+
+<Accordion title="HDFS and Hive Settings">
+
+<ResponseField name="hdfs_address" type="string">
+  HDFS NameNode address (e.g. `hdfs://namenode:8020`).
+</ResponseField>
+
+<ResponseField name="hdfs_basedir" type="string">
+  Base HDFS directory where DBImport stores data (e.g. `/datalake`).
+</ResponseField>
+
+<ResponseField name="hdfs_blocksize" type="string">
+  HDFS block size override for DBImport-managed files (e.g. `256M`).
+</ResponseField>
+
+<ResponseField name="hive_validate_before_execution" type="boolean">
+  Whether Hive table validation runs before each import/export execution.
+</ResponseField>
+
+<ResponseField name="hive_validate_table" type="string">
+  Specific Hive table pattern to validate before execution.
+</ResponseField>
+
+<ResponseField name="hive_print_messages" type="boolean">
+  Whether Hive progress messages are printed to logs.
+</ResponseField>
+
+<ResponseField name="hive_major_compact_after_merge" type="boolean">
+  Whether a major ORC compaction is triggered after merge operations.
+</ResponseField>
+
+<ResponseField name="hive_acid_with_clusteredby" type="boolean">
+  Whether ACID tables include a `CLUSTERED BY` clause.
+</ResponseField>
+
+<ResponseField name="hive_insert_only_tables" type="boolean">
+  Whether new Hive tables are created as ACID insert-only tables.
+</ResponseField>
+
+<ResponseField name="hive_remove_locks_by_force" type="boolean">
+  Whether stale Hive locks are forcibly removed before operations.
+</ResponseField>
+
+<ResponseField name="impala_invalidate_metadata" type="boolean">
+  Whether Impala `INVALIDATE METADATA` is run after import.
+</ResponseField>
+
+</Accordion>
+
+<Accordion title="Spark Settings">
+
+<ResponseField name="spark_max_executors" type="integer">
+  Global maximum number of Spark executors per job.
+</ResponseField>
+
+</Accordion>
+
+<Accordion title="Atlas Settings">
+
+<ResponseField name="atlas_discovery_interval" type="integer">
+  Interval in minutes between Atlas discovery scans.
+</ResponseField>
+
+</Accordion>
+
+<Accordion title="Kafka / REST / AWS SNS Event Streaming">
+
+<ResponseField name="post_data_to_kafka" type="boolean">
+  Whether completed import/export events are published to Kafka.
+</ResponseField>
+
+<ResponseField name="post_data_to_kafka_extended" type="boolean">
+  Whether extended event metadata is included in Kafka messages.
+</ResponseField>
+
+<ResponseField name="kafka_brokers" type="string">
+  Comma-separated Kafka broker addresses.
+</ResponseField>
+
+<ResponseField name="kafka_topic" type="string">
+  Kafka topic name for DBImport event messages.
+</ResponseField>
+
+<ResponseField name="kafka_securityprotocol" type="string">
+  Kafka security protocol (e.g. `SASL_SSL`).
+</ResponseField>
+
+<ResponseField name="kafka_saslmechanism" type="string">
+  SASL mechanism for Kafka authentication (e.g. `PLAIN`, `SCRAM-SHA-256`).
+</ResponseField>
+
+<ResponseField name="kafka_trustcafile" type="string">
+  Path to the CA certificate file for Kafka TLS verification.
+</ResponseField>
+
+<ResponseField name="post_data_to_rest" type="boolean">
+  Whether events are posted to an external REST endpoint.
+</ResponseField>
+
+<ResponseField name="post_data_to_rest_extended" type="boolean">
+  Whether extended metadata is included in REST event posts.
+</ResponseField>
+
+<ResponseField name="rest_url" type="string">
+  URL of the external REST endpoint to receive event notifications.
+</ResponseField>
+
+<ResponseField name="rest_timeout" type="integer">
+  Timeout in seconds for REST event post requests.
+</ResponseField>
+
+<ResponseField name="rest_verifyssl" type="boolean">
+  Whether SSL certificates are verified for REST event posts.
+</ResponseField>
+
+<ResponseField name="rest_trustcafile" type="string">
+  Path to CA certificate for REST endpoint TLS verification.
+</ResponseField>
+
+<ResponseField name="post_data_to_awssns" type="boolean">
+  Whether events are published to AWS SNS.
+</ResponseField>
+
+<ResponseField name="post_data_to_awssns_extended" type="boolean">
+  Whether extended metadata is included in SNS messages.
+</ResponseField>
+
+<ResponseField name="post_data_to_awssns_topic" type="string">
+  AWS SNS topic ARN for event messages.
+</ResponseField>
+
+</Accordion>
+
+<Accordion title="General Settings">
+
+<ResponseField name="cluster_name" type="string">
+  Logical name for this DBImport cluster (used in lineage and event metadata).
+</ResponseField>
+
+<ResponseField name="timezone" type="string">
+  Global default timezone (e.g. `Europe/Stockholm`).
+</ResponseField>
+
+<ResponseField name="timestamp_with_timezone" type="boolean">
+  Whether timestamps are stored with timezone information in Hive.
+</ResponseField>
+
+</Accordion>
+
+<Accordion title="REST Server Settings (admin only)">
+
+<ResponseField name="restserver_admin_user" type="string">
+  Username of the designated admin user. Only visible to the admin user.
+</ResponseField>
+
+<ResponseField name="restserver_authentication_method" type="string">
+  Authentication method: `local` (bcrypt database) or `pam` (PAM).
+</ResponseField>
+
+<ResponseField name="restserver_token_ttl" type="integer">
+  JWT token time-to-live in minutes.
+</ResponseField>
+
+</Accordion>
+
+---
+
+## POST /config/updateConfig
+
+Updates one or more global configuration keys. Only the keys explicitly set in the request body (non-null values) are written to the database; all other keys remain unchanged.
+
+**Authentication:** Bearer token required
+
+<Warning>
+  Updating `restserver_admin_user`, `restserver_authentication_method`, or `restserver_token_ttl` is restricted to the admin user. Attempting to update these keys as a non-admin returns HTTP `403`.
+</Warning>
+
+### Request Body
+
+A partial `configuration` object. Include only the keys you want to change. Keys not present in the request body are left unchanged.
+
+```json title="Example: update Airflow URL and session limits"
+{
+  "airflow_url": "https://airflow.internal.example.com",
+  "import_default_sessions": 4,
+  "import_max_sessions": 10
+}
+```
+
+### Validation Rules
+
+- `airflow_major_version` must be `1` or `2`
+- `restserver_authentication_method` must be `"local"` or `"pam"`
+- String values cannot be set to empty strings
+
+### Response
+
+Returns `"ok"` with HTTP `200` on success. Returns HTTP `400` on invalid values, or HTTP `403` when a non-admin attempts to change restricted keys.

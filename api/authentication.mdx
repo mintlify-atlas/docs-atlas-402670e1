@@ -1,0 +1,254 @@
+---
+title: "Authenticate with the DBImport REST API using JWT"
+sidebarTitle: "Authentication"
+description: "Obtain a JWT Bearer token via OAuth2 password flow and learn how DBImport supports local, PAM, and AWS Secrets Manager authentication back-ends."
+---
+
+The DBImport REST API uses the **OAuth2 password flow** to authenticate clients. You exchange a username and password for a short-lived JWT (JSON Web Token) and then attach that token to every subsequent request. Tokens are signed with HS256 using a secret key stored in the DBImport `configuration` table, and they carry an expiry claim so the server rejects stale tokens automatically.
+
+## Obtaining a token
+
+Send a `POST` request to `/oauth2/access_token` with your credentials as `application/x-www-form-urlencoded` form fields.
+
+<Tabs>
+  <Tab title="curl">
+    ```bash
+    curl -X POST https://dbimport-server:8080/oauth2/access_token \
+      -d 'username=admin&password=yourpassword'
+    ```
+  </Tab>
+  <Tab title="Python (requests)">
+    ```python
+    import requests
+
+    response = requests.post(
+        "https://dbimport-server:8080/oauth2/access_token",
+        data={"username": "admin", "password": "yourpassword"},
+    )
+    token = response.json()["access_token"]
+    ```
+  </Tab>
+</Tabs>
+
+A successful response returns a Bearer token:
+
+```json
+{
+  "access_token": "<JWT>",
+  "token_type": "bearer"
+}
+```
+
+<Warning>
+  The `/oauth2/access_token` endpoint accepts form-encoded data (`application/x-www-form-urlencoded`), **not** JSON. Sending a JSON body will result in a validation error.
+</Warning>
+
+## Using the token
+
+Include the token in the `Authorization` header for every protected request:
+
+```text
+Authorization: Bearer <token>
+```
+
+### Full example
+
+```bash
+# Step 1 — obtain a token
+TOKEN=$(curl -s -X POST https://dbimport-server:8080/oauth2/access_token \
+  -d 'username=admin&password=yourpassword' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Step 2 — use the token to call a protected endpoint
+curl -H "Authorization: Bearer $TOKEN" \
+  https://dbimport-server:8080/connection
+```
+
+<Note>
+  Only the `/status` and `/oauth2/access_token` endpoints are public. Every other route returns `401 Unauthorized` when the `Authorization` header is absent or the token is invalid or expired.
+</Note>
+
+## Token lifetime
+
+Tokens expire after a configurable number of minutes. When a token expires, requests return `401 Unauthorized` and you must authenticate again to obtain a new one.
+
+The TTL is set in the `configuration` table:
+
+| Key | Type | Description |
+|---|---|---|
+| `restserver_token_ttl` | Integer | Number of minutes before a token expires |
+
+To view or change the current TTL, use the `/config/getConfig` and `/config/updateConfig` endpoints after authenticating as an admin.
+
+## Authentication methods
+
+The `restserver_authentication_method` configuration key controls how DBImport validates passwords. Three strategies are supported.
+
+<Tabs>
+  <Tab title="local">
+    Passwords are stored as bcrypt hashes in the `auth_users` table of the DBImport database. This is the default method and requires no external dependencies.
+
+    When a user authenticates, the server computes a bcrypt hash of the supplied password and compares it against the stored hash. Passwords are never stored or transmitted in plain text.
+
+    ```text
+    restserver_authentication_method = local
+    ```
+  </Tab>
+  <Tab title="pam">
+    Passwords are validated against the operating system via **PAM (Pluggable Authentication Modules)**. The server calls `pam.authenticate(username, password, service='login')` and grants access only if PAM returns success.
+
+    Use this method when you want REST API users to authenticate with their OS accounts, for example in an LDAP-backed PAM environment.
+
+    ```text
+    restserver_authentication_method = pam
+    ```
+
+    <Note>
+      PAM authentication delegates password verification to the OS. DBImport does not store or manage passwords in this mode. The `changePassword` endpoint is unavailable when PAM is active.
+    </Note>
+  </Tab>
+  <Tab title="AWS Secrets Manager">
+    Individual user accounts can have their password stored as an **AWS Secrets Manager ARN** rather than a bcrypt hash. This applies when using the `local` authentication method — the server detects the ARN prefix and fetches the actual password from Secrets Manager at login time.
+
+    Set the user's `password` field in the `auth_users` table to an ARN in the form:
+
+    ```text
+    arn:aws:secretsmanager:<region>:<account-id>:secret:<secret-name>
+    ```
+
+    The server reads the secret, extracts the `"password"` key from the JSON payload, and compares it against the supplied credential. Ensure the DBImport service role has `secretsmanager:GetSecretValue` permission on the target secret, and that the `AWS` section of the configuration file has a valid `region`.
+  </Tab>
+</Tabs>
+
+## Admin user
+
+DBImport automatically creates the admin user defined by `restserver_admin_user` the first time the REST server starts, if that user does not already exist. The initial password is set to `admin`.
+
+<Warning>
+  Change the admin password immediately after your first login. Use `POST /users/{user}/changePassword` or the `POST /config/updateConfig` endpoint. Leaving the default `admin` password in place is a security risk.
+</Warning>
+
+The admin user has elevated privileges:
+
+- **Create users** — only the admin can call `POST /users/createUser`
+- **Delete users** — only the admin can call `DELETE /users/{user}/delete`
+- **Change any password** — the admin can reset any user's password; non-admins can only change their own
+- **Update any profile** — the admin can modify any user's attributes; non-admins can only update their own
+
+The admin account itself cannot be deleted via the API.
+
+## Password management
+
+### Change a password
+
+`POST /users/{user}/changePassword`
+
+<Info>
+  This endpoint is only available when `restserver_authentication_method` is `local`. It returns `403 Forbidden` on PAM deployments.
+</Info>
+
+Non-admin users must supply their current password in `old_password`. The admin user can reset any password without providing the existing one.
+
+**Request body:**
+
+```json
+{
+  "old_password": "currentpassword",
+  "new_password": "newsecurepassword"
+}
+```
+
+`old_password` is required for non-admin users and ignored for the admin.
+
+### Change your own password (non-admin)
+
+```bash
+curl -X POST https://dbimport-server:8080/users/myusername/changePassword \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"old_password": "currentpassword", "new_password": "newsecurepassword"}'
+```
+
+### Admin reset of another user's password
+
+```bash
+curl -X POST https://dbimport-server:8080/users/targetuser/changePassword \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"new_password": "resetpassword"}'
+```
+
+## User management (admin only)
+
+The following endpoints are restricted to the admin user.
+
+### Create a user
+
+`POST /users/createUser`
+
+```bash
+curl -X POST https://dbimport-server:8080/users/createUser \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "alice",
+    "password": "initialpassword",
+    "disabled": false,
+    "fullname": "Alice Smith",
+    "department": "Data Engineering",
+    "email": "alice@example.com"
+  }'
+```
+
+Returns `409 Conflict` if a user with that username already exists.
+
+### Update a user's profile
+
+`POST /users/{user}/update`
+
+Admins can update any user. Non-admins can update only their own `fullname`, `department`, `email`, and `disabled` fields (they cannot disable themselves).
+
+```bash
+curl -X POST https://dbimport-server:8080/users/alice/update \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fullname": "Alice J. Smith",
+    "email": "alice.j@example.com",
+    "disabled": false
+  }'
+```
+
+### Delete a user
+
+`DELETE /users/{user}/delete`
+
+```bash
+curl -X DELETE https://dbimport-server:8080/users/alice/delete \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+<Warning>
+  Deleting the admin user (the one named in `restserver_admin_user`) is not permitted. The server returns `403 Forbidden` if you attempt it.
+</Warning>
+
+## Error responses
+
+| HTTP status | Meaning |
+|---|---|
+| `401 Unauthorized` | Missing, invalid, or expired token; wrong username or password |
+| `400 Bad Request` | The authenticated user's account has been disabled |
+| `403 Forbidden` | Action requires admin privileges, or auth method does not support the operation |
+| `404 Not Found` | The specified user does not exist |
+| `409 Conflict` | A user with the requested username already exists |
+
+## Security configuration reference
+
+| `configuration` key | Description |
+|---|---|
+| `restserver_admin_user` | Username of the built-in administrator |
+| `restserver_authentication_method` | `local` or `pam` |
+| `restserver_token_ttl` | Token lifetime in minutes |
+| `restserver_secret_key` | HS256 signing secret for JWT tokens — rotate regularly and keep private |

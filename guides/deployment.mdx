@@ -1,0 +1,88 @@
+---
+title: "Deploy DAG Configurations from Test to Production"
+sidebarTitle: "Deployment"
+description: "Promote Airflow DAG definitions, import/export table configs, and JDBC connections from a test DBImport instance to production with a single CLI command."
+---
+
+DBImport provides built-in deployment tooling to promote configurations from a test or development environment to production without manually recreating them in each environment. The deployment is entirely configuration-driven: it copies Airflow DAG definitions, custom task entries, import and export table configurations (including column-level settings), and JDBC connection definitions from one DBImport MySQL database to another. No Hive tables, HDFS data, or files are touched during deployment.
+
+<Warning>
+  There is currently no web UI for the deployment workflow. All operations are
+  performed through the `./deploy` CLI tool directly against the MySQL
+  configuration database.
+</Warning>
+
+## Configuration
+
+### Register the Target Instance
+
+Before deploying, register the production (or any target) DBImport instance in the `dbimport_instances` table of the source environment:
+
+| Column | Description |
+|---|---|
+| `name` | Logical name for the target instance. Used as the `--deployTarget` value in deploy commands. |
+| `db_hostname` | Hostname of the MySQL server running the target DBImport configuration database. |
+| `db_port` | Port of that MySQL server. |
+| `db_database` | Name of the DBImport database on the target MySQL instance. |
+| `db_credentials` | Leave blank — credentials are encrypted in the next step. |
+| `sync_credentials` | Set to `1` if the source and target environments share the same public/private key pair. When enabled, encrypted JDBC connection credentials are copied along with the connection definition. |
+
+### Encrypt Remote Credentials
+
+After saving the row, encrypt the username and password for a user with `SELECT`, `INSERT`, `UPDATE`, and `DELETE` permissions on the target MySQL database:
+
+```bash
+./manage --encryptInstance
+```
+
+The tool prompts for the instance name and credentials, then stores the encrypted values in the `db_credentials` column.
+
+## Deploying Changes
+
+With the target instance registered, run the appropriate deploy command from the **source** environment.
+
+<Tabs>
+  <Tab title="Import DAG">
+    Deploys an import DAG definition — including all associated `airflow_tasks` entries, `import_tables` rows (with column configurations), and the `jdbc_connections` entries those tables reference:
+
+    ```bash
+    ./deploy --deployAirflowImportDAG \
+      --deployTarget=<Remote DBImport Instance> \
+      --airflowDAG=<DAG NAME>
+    ```
+  </Tab>
+  <Tab title="Export DAG">
+    Deploys an export DAG definition — including all associated `airflow_tasks` entries, `export_tables` rows (with column configurations), and the `jdbc_connections` entries those tables reference:
+
+    ```bash
+    ./deploy --deployAirflowExportDAG \
+      --deployTarget=<Remote DBImport Instance> \
+      --airflowDAG=<DAG NAME>
+    ```
+  </Tab>
+</Tabs>
+
+## What Gets Deployed
+
+Each deploy command copies the following to the target instance:
+
+<CardGroup cols={2}>
+  <Card title="DAG Definition" icon="diagram-project">
+    The row in `airflow_import_dags` or `airflow_export_dags` for the specified DAG name, including schedule, filter, and all DAG-level settings.
+  </Card>
+  <Card title="Custom Tasks" icon="list-check">
+    All rows in `airflow_tasks` associated with the deployed DAG — shell scripts, Hive queries, sensors, triggers, and any other task types.
+  </Card>
+  <Card title="Table Configurations" icon="table">
+    All `import_tables` or `export_tables` rows belonging to the DAG, including per-column configuration from `import_columns` or `export_columns`.
+  </Card>
+  <Card title="JDBC Connections" icon="plug">
+    All `jdbc_connections` entries referenced by the deployed tables. If `sync_credentials = 1` on the instance, encrypted credentials are included.
+  </Card>
+</CardGroup>
+
+<Note>
+  After deploying, remember to regenerate the Airflow DAG file on the target
+  instance using `./manage --airflowGenerate --airflowDAG=<DAG NAME>
+  --airflowWriteDAG` so Airflow picks up the updated configuration.
+</Note>

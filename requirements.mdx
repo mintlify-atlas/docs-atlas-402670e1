@@ -1,0 +1,156 @@
+---
+title: "DBImport System Requirements and Prerequisites"
+sidebarTitle: "Requirements"
+description: "Python version, Hive transport mode, Kerberos, MySQL config database, Hive Metastore access, and full Python package dependency list for DBImport."
+---
+
+DBImport has a specific set of prerequisites on both the server where it is installed and the Hadoop environment in which it operates. Review every item on this page before beginning the installation to avoid configuration problems later.
+
+## Python
+
+DBImport is verified with **Python 3.6** and **Python 3.8**. Other versions may work but are not tested. The Python version you choose also constrains the Spark version available to you.
+
+<Note>
+  Python 3.8 requires Spark 3. Running Python 3.8 with Spark 2 will cause errors during the ETL and Hive processing steps.
+</Note>
+
+It is strongly recommended to run DBImport inside a Python virtual environment to isolate its dependencies from other tools installed on the same host.
+
+## Hive
+
+DBImport connects to HiveServer2 using the **binary transport mode**. HTTP transport is not supported. An **LLAP** (Live Long and Process) instance is preferred over a standard HiveServer2 because of the significantly lower query startup latency it provides for the many short SQL statements DBImport issues during schema detection and ETL.
+
+<Note>
+  DBImport does not use the Hive JDBC driver for its internal ETL queries. It communicates with Hive through PyHive over the Thrift binary protocol. Ensure that port 10000 (or whichever port your HiveServer2 binary endpoint listens on) is accessible from the DBImport host.
+</Note>
+
+## Kerberos
+
+**Kerberos is required.** DBImport does not support Hive clusters without Kerberos authentication. A valid keytab file and principal must be present on the DBImport host and configured in `dbimport.cfg` before any import can run. DBImport refreshes its Kerberos ticket automatically at the start of each execution.
+
+## MySQL / MariaDB Configuration Database
+
+DBImport stores all import definitions, connection strings, column overrides, Airflow DAG mappings, and statistics in a **MySQL or MariaDB** database.
+
+<Note>
+  MariaDB version **10.2.8 and earlier in the 10.2 series** are not supported due to an incompatibility with SQLAlchemy. Use either the **10.1.x** branch or **10.2.9 or newer**.
+</Note>
+
+The DBImport application user needs `CREATE TABLE`, `ALTER TABLE`, `INSERT`, `UPDATE`, `DELETE`, and `SELECT` permissions on the configuration schema so that `./setup --createDB` and `./setup --upgradeDB` can manage the schema automatically.
+
+## Hive Metastore Database Access
+
+DBImport requires a **direct JDBC connection to the Hive Metastore database** (the underlying SQL database that backs the Hive catalog — typically MySQL or PostgreSQL). This connection is used to read partition metadata, detect schema changes, and manage table definitions without going through HiveServer2 for every operation.
+
+Configure the connection string in `dbimport.cfg` under `[Metastore]` → `hive_metastore_alchemy_conn` using a SQLAlchemy connection URL.
+
+<Note>
+  If `hive_remove_locks_by_force` is set to `1` in the `configuration` table, the Metastore database user must have `DELETE` permission on the `HIVE_LOCKS` table. Otherwise, read-only (`SELECT`) access is sufficient.
+</Note>
+
+## Sqoop and Spark
+
+| Engine | Supported versions |
+|---|---|
+| Sqoop | Sqoop 1.x (on HDP or CDH/CDP) |
+| Spark 2 | Works with Python 3.6 |
+| Spark 3 | Required for Python 3.8; available as a separate parcel on CDP |
+
+Sqoop cannot export data from Hive 3.x transactional tables. If your cluster runs Hive 3.x, you must use Spark for all exports.
+
+## Hardware and Network
+
+DBImport itself is a lightweight coordinator process — it issues SQL and spawns Sqoop/Spark jobs rather than processing data itself. The following considerations apply to the host running DBImport.
+
+- **Network:** The DBImport host must have TCP access to the source JDBC database, HiveServer2 (binary, typically port 10000), the Hive Metastore database, and the MySQL configuration database.
+- **Storage:** No large local storage is required. Sqoop and Spark write directly to HDFS or S3.
+- **CPU / Memory:** A single-core, 2 GB node is sufficient for running the DBImport coordinator process itself. Spark executor resources are configured separately in `dbimport.cfg` and allocated from the YARN cluster.
+
+## Python Package Requirements
+
+The table below lists every Python package pinned in `requirements_python38.txt`. Install these with `pip3.8 install -r requirements_python38.txt` from the DBImport installation directory.
+
+<Note>
+  A separate `requirements_python36.txt` is provided for Python 3.6 environments. The package list is nearly identical; the main differences are in version pins for packages that dropped Python 3.6 support.
+</Note>
+
+| Package | Version (Python 3.8) |
+|---|---|
+| alembic | 1.13.1 |
+| aniso8601 | 9.0.1 |
+| anyio | 4.2.0 |
+| bcrypt | 4.1.2 |
+| boto3 | 1.34.36 |
+| botocore | 1.34.36 |
+| certifi | 2024.7.4 |
+| cffi | 1.16.0 |
+| click | 8.1.7 |
+| colorama | 0.4.6 |
+| configparser | 6.0.0 |
+| cryptography | 42.0.2 |
+| daemons | 1.3.2 |
+| fastapi | 0.109.2 |
+| Flask | 3.0.2 |
+| Flask-RESTful | 0.3.10 |
+| greenlet | 3.0.3 |
+| gssapi | 1.8.3 |
+| gunicorn | 21.2.0 |
+| JayDeBeApi | 1.2.3 |
+| JPype1 | 1.5.0 |
+| kafka-python | 2.0.2 |
+| krb5 | 0.5.1 |
+| marshmallow | 3.20.2 |
+| mysql-connector-python | 8.3.0 |
+| numpy | 1.24.4 |
+| pandas | 2.0.3 |
+| passlib | 1.7.4 |
+| pendulum | 3.0.0 |
+| protobuf | 4.25.2 |
+| psutil | 5.9.8 |
+| pure-sasl | 0.6.2 |
+| pycryptodome | 3.20.0 |
+| pydantic | 2.6.1 |
+| PyHive | 0.7.0 |
+| pykerberos | 1.2.4 |
+| pymongo | 4.6.1 |
+| PyMySQL | 1.1.1 |
+| pyspnego | 0.10.2 |
+| python-dateutil | 2.8.2 |
+| python-jose | 3.3.0 |
+| PyYAML | 6.0.1 |
+| requests | 2.32.0 |
+| requests-kerberos | 0.14.0 |
+| sasl | 0.3.1 |
+| SQLAlchemy | 2.0.25 |
+| SQLAlchemy-Utils | 0.41.1 |
+| thrift | 0.16.0 |
+| thrift-sasl | 0.4.3 |
+| uvicorn | 0.27.0.post1 |
+| uvloop | 0.19.0 |
+| waitress | 3.0.0 |
+| webargs | 8.4.0 |
+| websockets | 12.0 |
+| Werkzeug | 3.0.3 |
+
+## Summary Checklist
+
+<CardGroup cols={2}>
+  <Card title="Python 3.6 or 3.8" icon="python">
+    Python 3.8 requires Spark 3. A virtual environment is strongly recommended.
+  </Card>
+  <Card title="Kerberos enabled cluster" icon="key">
+    Valid keytab file and principal required. Non-Kerberos deployments are not supported.
+  </Card>
+  <Card title="HiveServer2 binary transport" icon="server">
+    HTTP transport mode is not supported. LLAP preferred for performance.
+  </Card>
+  <Card title="MySQL / MariaDB ≥ 10.2.9" icon="database">
+    Stores all DBImport configuration. MariaDB 10.2.8 and earlier are not supported.
+  </Card>
+  <Card title="Direct Hive Metastore DB access" icon="diagram-project">
+    SQLAlchemy connection string to the Metastore backing database (MySQL or PostgreSQL).
+  </Card>
+  <Card title="Sqoop or Spark on YARN" icon="bolt">
+    Sqoop 1.x for Hive 2; Spark 3 required for Hive 3 transactional tables and Iceberg.
+  </Card>
+</CardGroup>

@@ -1,0 +1,190 @@
+---
+title: "DBImport Export Methods: Full and Incremental Exports"
+sidebarTitle: "Export Methods"
+description: "Learn how DBImport exports Hive data to relational databases or S3, covering full and incremental stage flows, row-count validation, and S3 setup."
+---
+
+DBImport can export data from Hive back to relational target databases or to AWS S3. Exports complement the import pipeline by making processed or transformed lakehouse data available to downstream consumers in traditional database systems. There are two export methods: a full export that replaces all data in the target, and an incremental export that appends only new rows since the last run.
+
+<Note>
+  Stage numbers shown in this page are the internal stage IDs used by DBImport. They appear in the `export_stage` and `export_retries_log` tables.
+</Note>
+
+## Supported Target Systems
+
+Exports support the following target database types:
+
+- Oracle
+- Microsoft SQL Server (MSSQL)
+- MySQL
+- IBM DB2
+- PostgreSQL
+- AWS S3 (Parquet format only, full export only)
+
+<Note>
+  If you are running Hive 3.x, all Hive tables are transactional tables and Sqoop cannot export them directly. In that case, Spark must be used as the export tool.
+</Note>
+
+---
+
+## Export Methods
+
+<Tabs>
+  <Tab title="Full Export">
+
+A full export reads the entire Hive source table, optionally stages the data through a Temporary Export Table, truncates the target database table, and then exports all rows via Sqoop. The target table is recreated or updated to match the current Hive schema before the export runs.
+
+| Setting | Value |
+|---|---|
+| Export Type | `full` |
+
+**When to use it:** Any time you want the target database table to be a complete, current copy of the Hive table. This is the standard export method for most use cases.
+
+### Stage Flow (100–109)
+
+| Stage | Name | Description |
+|---|---|---|
+| 100 | Getting Hive table schema | Connects to Hive, reads column names, types, and comments, and saves them to the configuration database |
+| 101 | Clear table rowcount | Removes the row count recorded from the previous export run |
+| 102 | Update Hive statistics | Refreshes Hive table statistics — required for an accurate row count |
+| 103 | Create Export Temp table | Creates the Temporary Export Table in Hive if one is required |
+| 104 | Truncate Export Temp table | Clears the Temporary Export Table before loading |
+| 105 | Insert data into Export Temp table | Loads data from the Hive source table into the Temporary Export Table |
+| 106 | Create Target table | Creates or updates the target table in the destination database to match the current Hive schema |
+| 107 | Truncate Target table | Clears all existing rows from the target database table |
+| 108 | Sqoop Export | Executes the Sqoop export job. If this fails, the next run restarts from stage 106 |
+| 109 | Validations | Compares the row count in the Hive table against the row count in the target database table |
+
+<Note>
+  Steps 103–105 (Temporary Export Table) are only executed when required by the connection type or configuration. For many full exports, the data is exported directly from the Hive source table.
+</Note>
+
+  </Tab>
+  <Tab title="Incremental Export">
+
+An incremental export tracks the minimum and maximum values of an incremental column from the previous run. On each run it reads the max value currently in Hive, loads only the new rows into a Temporary Export Table (always required for incremental exports), then Sqoop-exports those rows to the target. After a successful export, the new max value is saved so the next run starts from there.
+
+| Setting | Value |
+|---|---|
+| Export Type | `incr` |
+
+**When to use it:** Append-only Hive tables where you want to push only new rows to the target database on each run rather than replacing the entire table.
+
+<Warning>
+  Incremental exports always require a **Temporary Export Table**. This table is created, truncated, and loaded on every run as part of the export pipeline.
+</Warning>
+
+### Stage Flow (150–160)
+
+| Stage | Name | Description |
+|---|---|---|
+| 150 | Getting Hive table schema | Connects to Hive, reads column names, types, and comments, and saves them to the configuration database |
+| 151 | Clear table rowcount | Removes the row count recorded from the previous export run |
+| 152 | Update Hive statistics | Refreshes Hive table statistics — required for correct row count |
+| 153 | Create Export Temp table | Creates the Temporary Export Table in Hive |
+| 154 | Truncate Export Temp table | Clears the Temporary Export Table before loading |
+| 155 | Fetch max value from Hive | Reads the current maximum value of the incremental column from Hive; this defines the upper bound of the delta to export |
+| 156 | Insert data into Export Temp table | Loads rows into the Temporary Export Table using the min and max incremental values as bounds |
+| 157 | Create Target table | Creates or updates the target table in the destination database |
+| 158 | Sqoop Export | Executes the Sqoop export job. If this fails, the next run restarts from stage 106 |
+| 159 | Validations | Compares row counts between the Hive Temporary Export Table and the target database table |
+| 160 | Save pending incremental values | Saves the min and max values from this run so the next export starts from the record after the current max |
+
+  </Tab>
+</Tabs>
+
+---
+
+## Export Validation
+
+Every export ends with a validation step that compares the number of rows in the Hive source (or Temporary Export Table for incremental exports) against the number of rows in the target database table. There are two validation methods available:
+
+<CardGroup cols={2}>
+  <Card title="Row Count" icon="list-ol">
+    Counts rows in both the Hive table and the target table and compares them. For incremental exports, only the rows within the current delta window are compared. A configurable tolerance (`validate_diff_allowed`) controls how many mismatched rows are acceptable.
+  </Card>
+  <Card title="Custom SQL" icon="code">
+    Executes a user-defined SQL query against both the Hive table and the target table, converts the results to JSON, and compares them. Results must match exactly. Useful for checksum or aggregation-based validation beyond simple row counts.
+  </Card>
+</CardGroup>
+
+---
+
+## AWS S3 Export
+
+DBImport supports exporting Hive data directly to an Amazon S3 bucket. S3 exports use Spark (not Sqoop) and write data in Parquet format. The connection is configured in the `jdbc_connections` table using a custom URL format instead of a standard JDBC connection string.
+
+<Warning>
+  Incremental exports to AWS S3 are not supported. Only full exports (`export_type = full`) can target S3.
+</Warning>
+
+### Connection String Format
+
+The S3 address is stored in the `jdbc_url` column of the `jdbc_connections` table. It uses a semicolon-delimited format to carry required and optional parameters:
+
+```text
+s3a://<BUCKET>/<FOLDER>;region=<REGION>;format=parquet
+```
+
+| Parameter | Required | Description |
+|---|---|---|
+| `region` | Yes | AWS region name (e.g., `eu-west-1`) |
+| `format` | Yes | Output file format. Only `parquet` is supported |
+| `assumeRole` | No | IAM role ARN to assume before writing to S3 |
+| `proxy` | No | Proxy server for outbound connectivity. Format: `https://server:port` |
+
+**Example with all parameters:**
+
+```text
+s3a://my-special-bucket/data-from-hive;format=parquet;assumeRole=arn:aws:iam::123456789012:role/AssumeRoleForMe;proxy=https://proxyserver.democompany.se:8080;region=eu-west-1
+```
+
+### Target Path Resolution
+
+The final S3 path where data is written is constructed from the `jdbc_url` base path plus the `target_schema` and `target_table` values from the `export_tables` table:
+
+```text
+s3a://<BUCKET>/<FOLDER>/<target_schema>/<target_table>
+```
+
+If `target_schema` is empty or set to `-`, it is omitted from the path:
+
+```text
+s3a://<BUCKET>/<FOLDER>/<target_table>
+```
+
+**Example:** With a `jdbc_url` of `s3a://my-special-bucket/data-from-hive`, a `target_schema` of `default`, and a `target_table` of `test_hive_table`, the data is written to:
+
+```text
+s3a://my-special-bucket/data-from-hive/default/test_hive_table
+```
+
+### Schema File
+
+In addition to the Parquet data files, DBImport writes a JSON schema file to the same S3 directory. This file is the output of Spark's `df.schema.json()` function and is stored as `_schema.json`. It makes the file structure self-describing for downstream consumers.
+
+### Required IAM Permissions
+
+The IAM user or role used to write to S3 must have the following permissions on the target bucket:
+
+```json
+[
+  "s3:AbortMultipartUpload",
+  "s3:ListMultipartUploadParts",
+  "s3:DeleteObject",
+  "s3:GetObject",
+  "s3:PutObject",
+  "s3:ListBucket",
+  "s3:ListBucketMultipartUpload"
+]
+```
+
+### Storing S3 Credentials
+
+The `AccessKeyId` and `SecretAccessKey` are encrypted and stored in the `credentials` column of the `jdbc_connections` table. Use the `manage` command to encrypt and save them:
+
+```bash
+manage --encryptCredentials
+```
+
+You will be prompted for the database connection alias, the `AccessKeyId`, and the `SecretAccessKey`. The tool encrypts them and writes the result directly to the configuration database.

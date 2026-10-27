@@ -1,0 +1,281 @@
+---
+title: "Configuring JDBC Connections for Source and Target Databases"
+sidebarTitle: "JDBC Connections"
+description: "How to configure JDBC connection strings, encrypt credentials, set up AWS S3 exports, register JDBC drivers, and discover tables for import and export in DBImport."
+---
+
+Every import and export in DBImport is associated with a named database connection called a **connection alias**. Aliases are stored in the `jdbc_connections` table and act as the single source of truth for how DBImport reaches a remote database — including the JDBC URL, encrypted credentials, Atlas metadata, and optional time-window restrictions. AWS S3 targets are also configured through this same table.
+
+## The `jdbc_connections` Table
+
+Key columns you will interact with directly are listed below. Columns used internally (row counts, Atlas discovery timestamps, etc.) are maintained automatically.
+
+| Column | Description |
+|---|---|
+| `dbalias` | Unique name for this connection. Referenced by `import_tables` and `export_tables` |
+| `jdbc_url` | JDBC connection string (or S3 address string for AWS S3 targets) |
+| `credentials` | RSA-encrypted `username password` string (or AWS Secrets Manager ARN) |
+| `private_key_path` | Optional per-connection RSA private key path. Falls back to the global key in `conf/dbimport.cfg` |
+| `public_key_path` | Optional per-connection RSA public key path |
+| `contact_info` | Free-text contact information — surfaced in Apache Atlas |
+| `description` | Free-text description — surfaced in Apache Atlas |
+| `owner` | Owner of the data — surfaced in Apache Atlas |
+| `atlas_discovery` | `1` = run Atlas schema discovery on this connection |
+| `atlas_include_filter` | Regex include filter applied during Atlas discovery |
+| `atlas_exclude_filter` | Regex exclude filter applied during Atlas discovery |
+| `environment` | Environment label (e.g. `production`, `staging`) from `jdbc_connections_environments` |
+| `timewindow_start` | Earliest time of day this connection may be used |
+| `timewindow_stop` | Latest time of day this connection may be used |
+| `timewindow_timezone` | Timezone for the time window, overrides the global `timezone` setting |
+| `force_string` | `1` = map all `CHAR`/`VARCHAR` source columns to `STRING` in Hive |
+| `seed_file` | Path to a seed file for anonymization functions |
+
+---
+
+## Credential Encryption
+
+DBImport encrypts all database credentials using an RSA keypair before storing them in the `credentials` column. Credentials are never stored in plain text.
+
+To encrypt and save credentials for a connection alias, run:
+
+```bash
+./manage --encryptCredentials
+```
+
+The tool prompts for:
+1. The connection alias name
+2. The username
+3. The password
+
+On completion the encrypted string is written to the `credentials` column of the matching row in `jdbc_connections`. For AWS S3 connections the same command is used — enter the **AccessKeyId** as the username and the **SecretAccessKey** as the password.
+
+<Tip>
+You can also store credentials in AWS Secrets Manager. Set the `credentials` column to the full Secrets Manager ARN (e.g. `arn:aws:secretsmanager:eu-west-1:123456789012:secret:prod/dbimport/oracle`) and DBImport will fetch the secret at runtime using the region configured in `conf/dbimport.cfg`.
+</Tip>
+
+---
+
+## JDBC URL Formats
+
+The `jdbc_url` column must be set manually for each connection. Additional semicolon-separated parameters can be appended to any JDBC string to pass driver-specific settings. Below are the supported formats for every database type.
+
+<Tabs>
+  <Tab title="DB2 AS400">
+    ```text
+    jdbc:as400://<HOSTNAME>:<PORT>/<DATABASE>
+    ```
+
+    Default port: `446`
+  </Tab>
+  <Tab title="DB2 UDB">
+    ```text
+    jdbc:db2://<HOSTNAME>:<PORT>/<DATABASE>
+    ```
+
+    Default port: `50000`. SSL options can be appended:
+
+    ```text
+    jdbc:db2://<HOSTNAME>:<PORT>/<DATABASE>;sslConnection=true;sslTrustStoreLocation=/path/to/truststore.jks;sslTrustStorePassword=changeit
+    ```
+  </Tab>
+  <Tab title="Microsoft SQL Server">
+    Two drivers are supported. Use the **native Microsoft JDBC** driver for SQL Server local accounts, and **jTDS** for Active Directory / NTLM authentication:
+
+    ```text
+    # Native Microsoft JDBC (local accounts)
+    jdbc:sqlserver://<HOSTNAME>:<PORT>;database=<DATABASE_NAME>
+
+    # jTDS with NTLMv2 (Active Directory accounts)
+    jdbc:jtds:sqlserver://<HOSTNAME>:<PORT>;useNTLMv2=true;domain=<AD_DOMAIN>;databaseName=<DATABASE_NAME>
+    ```
+
+    Default port: `1433`. Encryption options for the native driver:
+
+    ```text
+    jdbc:sqlserver://<HOSTNAME>:<PORT>;database=<DATABASE_NAME>;encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.example.com;loginTimeout=30
+    ```
+  </Tab>
+  <Tab title="MySQL">
+    ```text
+    jdbc:mysql://<HOSTNAME>:<PORT>/<DATABASE>
+    ```
+
+    Default port: `3306`
+  </Tab>
+  <Tab title="Oracle">
+    Use the TNS-style connection descriptor with either `SERVICE_NAME` or `SID`:
+
+    ```text
+    jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=<HOSTNAME>)(PORT=<PORT>)))(CONNECT_DATA=(SERVICE_NAME=<SERVICE_NAME>)))
+    ```
+
+    LDAP-based Oracle connections are also supported:
+
+    ```text
+    jdbc:oracle:thin:@ldap://<LDAP_HOST>:<LDAP_PORT>/<DB>,cn=OracleContext,dc=example,dc=com
+    ```
+  </Tab>
+  <Tab title="PostgreSQL">
+    ```text
+    jdbc:postgresql://<HOSTNAME>:<PORT>/<DATABASE>
+    ```
+
+    Default port: `5432`
+  </Tab>
+  <Tab title="Progress / OpenEdge">
+    ```text
+    jdbc:datadirect:openedge://<HOSTNAME>:<PORT>;databaseName=<DATABASE>
+    ```
+
+    Default port: `9999`
+  </Tab>
+  <Tab title="Snowflake">
+    ```text
+    jdbc:snowflake://<ACCOUNT>.snowflakecomputing.com/?db=<DATABASE>&schema=<SCHEMA>&warehouse=<WAREHOUSE>
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## AWS S3 Export Connections
+
+DBImport can write Hive data to an S3 bucket as part of an export operation. Although S3 is not a JDBC database, S3 targets are configured in the same `jdbc_connections` table using a custom URL format.
+
+### S3 Connection String Format
+
+Enter the following string into the `jdbc_url` column of the connection row:
+
+```text
+s3a://<BUCKET>/<OPTIONAL_FOLDER>;region=<AWS_REGION>;format=parquet
+```
+
+A complete example including an assumed IAM role and proxy server:
+
+```text
+s3a://my-special-bucket/data-from-hive;format=parquet;assumeRole=arn:aws:iam::123456789012:role/AssumeRoleForMe;proxy=https://proxyserver.democompany.se:8080;region=eu-west-1
+```
+
+The supported semicolon-delimited parameters are:
+
+| Parameter | Required | Description |
+|---|---|---|
+| `region` | **Yes** | AWS region name (e.g. `eu-west-1`) |
+| `format` | **Yes** | Output format. Only `parquet` is supported |
+| `assumeRole` | No | IAM role ARN to assume before writing to S3 |
+| `assumeRoleDuration` | No | Duration in seconds to hold the assumed role |
+| `proxy` | No | HTTPS proxy for outbound connections, in `https://server:port` format |
+| `externalId` | No | External ID for cross-account role assumption |
+
+### S3 IAM Permissions
+
+The IAM user or role must have all seven of the following S3 permissions on the target bucket:
+
+<CardGroup cols={2}>
+  <Card title="s3:AbortMultipartUpload" icon="ban">
+    Cancel incomplete multipart uploads
+  </Card>
+  <Card title="s3:ListMultipartUploadParts" icon="list">
+    List parts of an in-progress multipart upload
+  </Card>
+  <Card title="s3:DeleteObject" icon="trash">
+    Remove objects (needed for overwrite operations)
+  </Card>
+  <Card title="s3:GetObject" icon="download">
+    Read objects from the bucket
+  </Card>
+  <Card title="s3:PutObject" icon="upload">
+    Write objects to the bucket
+  </Card>
+  <Card title="s3:ListBucket" icon="folder-open">
+    List objects within a bucket
+  </Card>
+  <Card title="s3:ListBucketMultipartUploads" icon="arrows-spin">
+    List multipart uploads in progress
+  </Card>
+</CardGroup>
+
+### Target Path Resolution
+
+The final S3 path is composed from the base URL in `jdbc_url`, the `target_schema` and `target_table` columns in `export_tables`:
+
+```text
+s3a://<BUCKET>/<FOLDER>/<target_schema>/<target_table>
+```
+
+DBImport also writes a schema file (`_schema.json`) alongside the data files. It contains the Spark DataFrame schema in JSON format and can be used by downstream consumers to interpret the Parquet column types.
+
+---
+
+## JDBC Driver Registration
+
+JDBC driver JAR files are registered in the `jdbc_connections_drivers` table. DBImport looks up driver details by `database_type` and `version` at connection time.
+
+| Column | Description |
+|---|---|
+| `database_type` | Database type name as expected by the Python scripts (e.g. `SQL Server`, `Oracle`, `MySQL`, `PostgreSQL`, `DB2 UDB`, `DB2 AS400`, `Progress DB`, `SnowFlake`) |
+| `version` | Free-text version label — e.g. `default` or `jTDS` for MSSQL |
+| `driver` | Fully qualified Java class name of the JDBC driver |
+| `classpath` | Absolute path to the JAR file. Multiple JARs must be separated by `:` with no spaces. Must not start with `add path to JAR file` |
+
+<Warning>
+The `classpath` value must start with `/`. If it contains the placeholder text `add path to JAR file`, DBImport will exit with a configuration error.
+</Warning>
+
+---
+
+## Testing a Connection
+
+After entering the JDBC URL and encrypting credentials, verify connectivity with:
+
+```bash
+./manage --testConnection -a <DATABASE_ALIAS>
+```
+
+Replace `<DATABASE_ALIAS>` with the value in the `dbalias` column. DBImport will attempt to open a JDBC connection and report success or a detailed error message.
+
+---
+
+## Discovering and Adding Tables
+
+### Adding Import Tables
+
+Use `--addImportTable` to discover tables on a source database and register them in `import_tables`:
+
+```bash
+# Add all tables found on the connection to the given Hive database
+./manage --addImportTable -a <CONNECTION_ALIAS> -h <HIVE_DB>
+
+# Filter by schema and/or table name (wildcards supported)
+./manage --addImportTable -a <CONNECTION_ALIAS> -h <HIVE_DB> -S <SCHEMA_FILTER> -T <TABLE_FILTER>
+```
+
+Options to control the Hive table name:
+
+| Option | Description |
+|---|---|
+| `--addCounterToTable` | Append an incrementing number to each Hive table name, starting at 1 |
+| `--counterStart=<N>` | Combined with `--addCounterToTable`, begin numbering from `<N>` |
+| `--addSchemaToTable` | Prepend the source schema name to the Hive table name |
+| `--addCustomText` | Append custom text to every Hive table name |
+
+### Adding Export Tables
+
+Use `--addExportTable` to discover Hive tables and register them in `export_tables`:
+
+```bash
+# Add all Hive tables that match, targeting the given remote schema
+./manage --addExportTable -a <CONNECTION_ALIAS> -S <TARGET_SCHEMA>
+
+# Filter by Hive database and/or table name (wildcards supported)
+./manage --addExportTable -a <CONNECTION_ALIAS> -S <TARGET_SCHEMA> -h <HIVE_DB_FILTER> -t <TABLE_FILTER>
+```
+
+Options to control the remote table name:
+
+| Option | Description |
+|---|---|
+| `--addCounterToTable` | Append an incrementing number to each remote table name |
+| `--counterStart=<N>` | Begin numbering from `<N>` |
+| `--addDBToTable` | Prepend the Hive database name to the remote table name |
+| `--addCustomText` | Append custom text to every remote table name |

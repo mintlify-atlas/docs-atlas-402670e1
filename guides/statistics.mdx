@@ -1,0 +1,180 @@
+---
+title: "Monitoring DBImport Operations with Statistics and Events"
+sidebarTitle: "Statistics"
+description: "Stream per-table import and export statistics as JSON to REST, Kafka, or AWS SNS endpoints — or query them directly from the DBImport database tables."
+---
+
+DBImport collects detailed statistics for every import and export operation and makes them available in three ways: database tables (always active), a REST endpoint, and a Kafka endpoint. The REST and Kafka outputs emit structured JSON that downstream systems — dashboards, alerting tools, data pipelines — can consume in real time to react to completed operations or monitor overall system health.
+
+## Database Tables
+
+Statistical records are written to the DBImport configuration database automatically, with no additional setup required. Four tables are available:
+
+| Table | Contents |
+|---|---|
+| `import_statistics` | Full history of all import runs. |
+| `import_statistics_last` | Only the most recent run for each imported table. |
+| `export_statistics` | Full history of all export runs. |
+| `export_statistics_last` | Only the most recent run for each exported table. |
+
+The `_last` tables exist as a performance convenience: querying them avoids scanning the full history table when you only care about the current state of each table.
+
+## JSON Statistics Format
+
+Two JSON formats are available for the REST and Kafka outputs. They can be selected independently per endpoint — for example, you can send the default format to Kafka and the extended format to REST.
+
+<Tabs>
+  <Tab title="Default Format">
+    A compact summary covering the complete import or export as a single operation. This is the most common format for integrations that need to react when a specific table finishes loading.
+
+    ```json
+    {
+        "type": "import",
+        "hive_db": "default",
+        "hive_table": "table1",
+        "import_phase": "full",
+        "etl_phase": "truncate_insert",
+        "incremental": false,
+        "source_database": "test",
+        "source_schema": "dbo",
+        "source_table": "table1",
+        "size": 41671452,
+        "rows": 2989699,
+        "start": "2021-11-08 06:59:47",
+        "stop": "2021-11-08 07:08:21",
+        "duration": 514
+    }
+    ```
+  </Tab>
+  <Tab title="Extended Format">
+    Includes the default fields plus per-stage start, stop, and duration timestamps for every internal DBImport phase. The exact set of stage fields varies by import method; the example below is from a full import with truncate.
+
+    ```json
+    {
+        "type": "import",
+        "hive_db": "default",
+        "hive_table": "table2",
+        "import_phase": "full",
+        "copy_phase": "none",
+        "etl_phase": "truncate_insert",
+        "incremental": false,
+        "source_database": "test",
+        "source_schema": "dbo",
+        "source_table": "table2",
+        "size": "686",
+        "rows": 5,
+        "sessions": 1,
+        "get_source_tableschema_start": "2021-11-08 07:51:30",
+        "get_source_tableschema_stop": "2021-11-08 07:51:31",
+        "get_source_tableschema_duration": 2,
+        "get_source_rowcount_start": "2021-11-08 07:51:31",
+        "get_source_rowcount_stop": "2021-11-08 07:51:31",
+        "get_source_rowcount_duration": 0,
+        "spark_start": "2021-11-08 07:51:31",
+        "spark_stop": "2021-11-08 07:52:21",
+        "spark_duration": 50,
+        "validate_sqoop_import_start": "2021-11-08 07:52:21",
+        "validate_sqoop_import_stop": "2021-11-08 07:52:21",
+        "validate_sqoop_import_duration": 0,
+        "atlas_schema_start": "2021-11-08 07:52:21",
+        "atlas_schema_stop": "2021-11-08 07:52:22",
+        "atlas_schema_duration": 1,
+        "copy_data_start": "2021-11-08 07:52:22",
+        "copy_data_stop": "2021-11-08 07:52:28",
+        "copy_data_duration": 6,
+        "connect_to_hive_start": "2021-11-08 07:52:29",
+        "connect_to_hive_stop": "2021-11-08 07:52:31",
+        "connect_to_hive_duration": 1,
+        "create_import_table_start": "2021-11-08 07:52:31",
+        "create_import_table_stop": "2021-11-08 07:52:31",
+        "create_import_table_duration": 0,
+        "hive_import_start": "2021-11-08 07:52:43",
+        "hive_import_stop": "2021-11-08 07:52:57",
+        "hive_import_duration": 14,
+        "update_statistics_start": "2021-11-08 07:52:57",
+        "update_statistics_stop": "2021-11-08 07:53:02",
+        "update_statistics_duration": 4,
+        "start": "2021-11-08 07:51:30",
+        "stop": "2021-11-08 07:53:09",
+        "duration": 99
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Airflow DAG Events
+
+In addition to per-table statistics, DBImport can emit a JSON event when an Airflow DAG starts and when it finishes. Enable this by setting `post_airflow_dag_operations` to `1` in the `configuration` table. Events are sent to whichever endpoints (REST, Kafka) are currently enabled.
+
+<CardGroup cols={2}>
+  <Card title="DAG Started" icon="play">
+    Emitted by the `start` task after confirming execution is allowed.
+
+    ```json
+    {
+        "type": "airflow_dag",
+        "status": "started",
+        "dag": "<name of dag>"
+    }
+    ```
+  </Card>
+  <Card title="DAG Finished" icon="flag-checkered">
+    Emitted by the `stop` task at the end of the DAG.
+
+    ```json
+    {
+        "type": "airflow_dag",
+        "status": "finished",
+        "dag": "<name of dag>"
+    }
+    ```
+  </Card>
+</CardGroup>
+
+## Enabling Outputs
+
+All output configuration lives in the `configuration` table under keys prefixed with `post_`:
+
+### REST Endpoint
+
+| Configuration Key | Type | Description |
+|---|---|---|
+| `post_data_to_rest` | `valueInt` | Set to `1` to enable the REST endpoint. |
+| `post_data_to_rest_extended` | `valueInt` | Set to `1` to send extended statistics to REST instead of the default format. |
+| `rest_url` | `valueStr` | Full URL of the REST endpoint. |
+| `rest_verifyssl` | `valueInt` | Set to `1` to verify the server's SSL certificate. |
+| `rest_trustcafile` | `valueStr` | Path to a CA bundle file for SSL verification. |
+| `rest_timeout` | `valueInt` | Timeout in seconds for REST calls. |
+
+<Tip>
+  A popular way to stand up a REST receiver is Apache NiFi using the
+  **HandleHttpRequest** and **HandleHttpResponse** processors. This gives you
+  a lightweight HTTP endpoint that can route, transform, or forward the JSON
+  statistics without writing any custom code.
+</Tip>
+
+### Kafka Endpoint
+
+| Configuration Key | Type | Description |
+|---|---|---|
+| `post_data_to_kafka` | `valueInt` | Set to `1` to enable the Kafka endpoint. |
+| `post_data_to_kafka_extended` | `valueInt` | Set to `1` to send extended statistics to Kafka. |
+| `kafka_brokers` | `valueStr` | Comma-separated list of Kafka broker addresses. |
+| `kafka_topic` | `valueStr` | Kafka topic to publish messages to. |
+| `kafka_saslmechanism` | `valueStr` | SASL mechanism (e.g. `PLAIN`, `SCRAM-SHA-256`). |
+| `kafka_securityprotocol` | `valueStr` | Security protocol (e.g. `SASL_SSL`). |
+| `kafka_trustcafile` | `valueStr` | Path to a CA bundle file for SSL connections. |
+
+### AWS SNS
+
+| Configuration Key | Type | Description |
+|---|---|---|
+| `post_data_to_awssns` | `valueInt` | Set to `1` to publish statistics to AWS SNS. |
+| `post_data_to_awssns_extended` | `valueInt` | Set to `1` to send extended statistics to SNS. |
+| `post_data_to_awssns_topic` | `valueStr` | ARN of the SNS topic to publish to. |
+
+<Note>
+  You can enable any combination of REST, Kafka, and AWS SNS simultaneously.
+  Each endpoint can independently use the default or extended JSON format via
+  its own `_extended` configuration key.
+</Note>

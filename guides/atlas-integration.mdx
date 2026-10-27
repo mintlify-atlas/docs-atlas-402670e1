@@ -1,0 +1,168 @@
+---
+title: "Apache Atlas Data Governance and Lineage with DBImport"
+sidebarTitle: "Atlas"
+description: "Register RDBMS schemas, track data lineage from SQL to Hive, and enable bulk discovery across all JDBC sources using DBImport's Atlas integration."
+---
+
+Data governance and metadata management are critical in any data lakehouse environment. DBImport's integration with Apache Atlas automatically registers source database schemas, tracks the complete lineage of every import and export, and — when the DBImport Server is running — continuously discovers and catalogues all tables and views across every connected JDBC source. No manual registration in Atlas is needed; DBImport keeps the catalogue up to date as your ingestion landscape evolves.
+
+## Two Registration Modes
+
+<CardGroup cols={2}>
+  <Card title="Import/Export Mode" icon="table">
+    Atlas is updated as part of every import or export run. Only tables that are actively being imported or exported are registered. If a source database has 100 tables but only 5 are configured in DBImport, only those 5 appear in Atlas.
+  </Card>
+  <Card title="Discovery Mode" icon="magnifying-glass">
+    Requires the DBImport Server daemon to be running. The server connects to every JDBC source in `jdbc_connections` and bulk-registers all tables and views it finds — whether or not they are currently imported. Include and exclude filters on the `jdbc_connections` table let you scope the discovery (for example, to skip test schemas).
+  </Card>
+</CardGroup>
+
+## Atlas Object Types
+
+DBImport creates and maintains the following object types in Atlas:
+
+<AccordionGroup>
+  <Accordion title="rdbms_instance">
+    Represents a database server instance.
+
+    | Attribute | Description |
+    |---|---|
+    | `name` | Name of the instance. |
+    | `databases` | Links to `rdbms_db` objects for each database in this instance. |
+    | `hostname` | Server hostname. |
+    | `port` | Port number. |
+    | `protocol` | Hardcoded to `JDBC` — the only protocol DBImport uses. |
+    | `rdbms_type` | Database engine type: Oracle, MSSQL, MySQL, Postgres, etc. |
+  </Accordion>
+  <Accordion title="rdbms_db">
+    Represents a database (schema container) inside an instance.
+
+    | Attribute | Description |
+    |---|---|
+    | `name` | Database name. |
+    | `instance` | Link to the parent `rdbms_instance` object. |
+    | `tables` | Links to `rdbms_table` objects for each table in this database. |
+    | `prodOrOther` | Populated from the `environment` column in `jdbc_connections`. |
+    | `owner` | Populated from the `owner` column in `jdbc_connections`. |
+    | `description` | Populated from the `description` column in `jdbc_connections`. |
+    | `contact_info` | Populated from the `contact_info` column in `jdbc_connections`. |
+  </Accordion>
+  <Accordion title="rdbms_table">
+    Represents a single table or view in a database.
+
+    | Attribute | Description |
+    |---|---|
+    | `name` | Table name. |
+    | `name_path` | Schema path of the table. |
+    | `db` | Link to the parent `rdbms_db` object. |
+    | `columns` | Links to `rdbms_column` objects for each column. |
+    | `comment` | Table comment read from the remote SQL database. |
+    | `type` | `table` or `view`. |
+    | `owner` | Populated from the `owner` column in `jdbc_connections`. |
+    | `contact_info` | Populated from the `contact_info` column in `jdbc_connections`. |
+  </Accordion>
+  <Accordion title="rdbms_column">
+    Represents an individual column within a table.
+
+    | Attribute | Description |
+    |---|---|
+    | `name` | Column name. |
+    | `table` | Link to the parent `rdbms_table` object. |
+    | `comment` | Column comment from the remote SQL database. |
+    | `data_type` | Column data type. |
+    | `isNullable` | `true` or `false`. |
+    | `isPrimaryKey` | `true` or `false`. |
+    | `length` | Precision or length (e.g., `45` for a `varchar(45)`). |
+    | `owner` | Populated from the `owner` column in `jdbc_connections`. |
+  </Accordion>
+  <Accordion title="DBImport_Process">
+    A custom Atlas process type installed as part of the DBImport schema. Each import or export execution creates one of these objects, providing a full audit record and serving as the lineage connector between source and destination.
+
+    | Attribute | Description |
+    |---|---|
+    | `commandlineOpts` | The full command line that was executed, including all parameters. |
+    | `description` | Human-readable summary of what the process did. |
+    | `startTime` | Timestamp when the DBImport process started. |
+    | `endTime` | Timestamp when the DBImport process completed. |
+    | `importTool` | `Sqoop` or `Spark`. |
+    | `input` | Link to the input object — typically `rdbms_table` for imports, `hive_table` for exports. |
+    | `output` | Link to the output object — typically `hdfs_path` for imports, `rdbms_table` for exports. |
+    | `operation` | `Import` or `Export`. |
+    | `username` | OS user that ran the DBImport process. |
+  </Accordion>
+</AccordionGroup>
+
+## Object Relationships
+
+In addition to the parent-child links documented in each object type above, DBImport reflects the structural relationships present in the source database:
+
+**Foreign keys** — If a source table has foreign key constraints referencing another table in the same database, DBImport creates the corresponding relationship between the two `rdbms_table` objects in Atlas. This gives data stewards a graph view of how source tables are related to one another.
+
+<Note>
+  Index relationships on `rdbms_table` objects are planned for a future version
+  of DBImport.
+</Note>
+
+## Lineage
+
+Data lineage is created automatically for every import and export — no additional configuration is required beyond enabling the Atlas integration. A typical import lineage chain looks like this:
+
+**`rdbms_table` (source SQL) → `DBImport_Process` → `hdfs_path` → `hive_table`**
+
+For exports, the direction reverses: `hive_table` → `DBImport_Process` → `rdbms_table`.
+
+The `DBImport_Process` node in the lineage graph carries the full execution metadata (tool used, start/stop times, operator username), making it straightforward to audit exactly when and how any dataset was produced.
+
+## Setup Requirements
+
+<Steps>
+  <Step title="Version requirement">
+    Atlas version **1.1.0 or higher** is required.
+  </Step>
+  <Step title="Configure the Atlas address">
+    In the DBImport configuration file (`conf/dbimport.cfg`), specify the Atlas server address. If Atlas is running with SSL, also configure the CA certificate path. All relevant properties are present in the default configuration file.
+  </Step>
+  <Step title="Install the DBImport schema in Atlas">
+    DBImport uses a custom type (`DBImport_Process`) that must be registered in Atlas before the first import runs. The schema file is included in the DBImport distribution at `atlas/dbimportProcess.json`. Register it via the Atlas REST API using a Kerberos session with Atlas admin permissions:
+
+    ```bash
+    curl --negotiate -u : -i -X POST \
+      -H 'Content-Type: application/json' \
+      -H 'Accept: application/json' \
+      "https://<ATLAS SERVER HOSTNAME>:<PORT>/api/atlas/v2/types/typedefs" \
+      -d "@<FULL_PATH_TO_DBIMPORT>/atlas/dbimportProcess.json"
+    ```
+  </Step>
+  <Step title="Copy the process icon to Atlas">
+    To display the DBImport icon in the Atlas lineage graph, copy `atlas/DBImport_Process.png` from the DBImport installation to the Atlas entity-icon directory on the Atlas server.
+
+    <Tabs>
+      <Tab title="HDP">
+        ```bash
+        cp /usr/local/dbimport/atlas/DBImport_Process.png \
+          /usr/hdp/current/atlas-server/server/webapp/atlas/img/entity-icon
+        ```
+      </Tab>
+      <Tab title="CDP / CDH">
+        ```bash
+        cp /usr/local/dbimport/atlas/DBImport_Process.png \
+          /opt/cloudera/parcels/CDH/lib/atlas/server/webapp/atlas/img/entity-icon
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Enable Discovery mode (optional)">
+    Start the DBImport Server daemon. The server reads `jdbc_connections` and begins periodically cataloguing all schemas found in those connections. Control the scan frequency with the `atlas_discovery_interval` configuration key (value in hours). Use the `include` and `exclude` filter columns on `jdbc_connections` to limit which schemas are discovered.
+  </Step>
+</Steps>
+
+## Caching
+
+To avoid repeatedly querying Atlas for objects it has already registered — which would place unnecessary load on the Atlas server — DBImport maintains two local cache tables in its configuration database:
+
+| Table | Purpose |
+|---|---|
+| `atlas_column_cache` | Caches column-level Atlas metadata to detect changes without polling Atlas on every run. |
+| `atlas_key_cache` | Caches Atlas entity GUIDs and keys used for relationship lookups. |
+
+These tables are managed automatically by DBImport. No manual interaction is required.

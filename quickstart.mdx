@@ -1,47 +1,240 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with DBImport: First Import in 5 Steps"
+sidebarTitle: "Quickstart"
+description: "Import the DBImport MySQL config database into Hive end-to-end — connection, credentials, table discovery, first import, and Airflow DAG generation."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through a complete end-to-end DBImport workflow: connecting to a source database, discovering its tables, running your first import, and scheduling recurring loads through an auto-generated Airflow DAG. The source database used throughout is the **DBImport MySQL configuration database itself**, which makes the guide fully self-contained — you do not need a separate source system to follow along.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Note>
+  A SQL client that makes interactive row editing easy is strongly recommended. [HeidiSQL](https://www.heidisql.com/) is the tool the DBImport authors use for this guide. Any MySQL-compatible client works.
+</Note>
 
-## Prerequisites
+Before continuing, complete the [Installation](/installation) steps so that `dbimport.cfg` is configured, the SSL keypair exists, and the configuration schema has been created with `./setup --createDB`.
 
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+---
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Create the JDBC Connection">
+
+    All imports start with a connection definition in the `jdbc_connections` table. Open your SQL client, connect to the DBImport configuration database, and insert a new row with the values below.
+
+    | Column | Value |
+    |---|---|
+    | `dbalias` | `dbimport` |
+    | `jdbc_url` | `jdbc:mysql://<HOSTNAME>/DBImport` |
+
+    Replace `<HOSTNAME>` with the fully-qualified hostname of the server running the DBImport configuration database.
+
+    <Warning>
+      Do **not** use `localhost` as the hostname. The Sqoop command is submitted to YARN and will execute on a cluster node that cannot resolve `localhost` to your configuration database server.
+    </Warning>
+
+  </Step>
+
+  <Step title="Encrypt and Save Credentials">
+
+    Usernames and passwords are never stored in plain text. Run the `manage` command to encrypt the credentials and write the ciphertext into the `credentials` column of `jdbc_connections`.
 
     ```bash
-    npm install your-package
+    ./manage --encryptCredentials
     ```
+
+    The tool will prompt you for three values in sequence.
+
+    | Prompt | Value to enter |
+    |---|---|
+    | Database Connection | `dbimport` |
+    | Username | Your DBImport config database username |
+    | Password | Your DBImport config database password |
+
+    After completing the prompts, refresh the `jdbc_connections` table in your SQL client and confirm that the `credentials` column now contains an encrypted string.
+
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Test the Connection">
+
+    Verify that DBImport can reach the source database before adding any import definitions.
 
     ```bash
-    your-cli init
+    ./manage --testConnection -a dbimport
     ```
+
+    | Flag | Meaning |
+    |---|---|
+    | `-a` | The `dbalias` value from `jdbc_connections` |
+
+    You must see a `Connected successfully` message before proceeding. If the connection fails, check the `jdbc_url`, firewall rules, and Kerberos ticket validity.
+
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Discover and Add Tables">
+
+    DBImport can query the source database's information schema and register every table it finds in `import_tables` automatically.
 
     ```bash
-    your-cli start
+    ./manage --addImportTable -a dbimport -h dbimport
     ```
+
+    | Flag | Meaning |
+    |---|---|
+    | `-a` | Source connection alias (`dbimport`) |
+    | `-h` | Hive destination database name (`dbimport`) |
+
+    The command lists all tables found on the source and asks you to confirm. Answer **Yes** to create an import definition for every table.
+
+    ### Set `mappers=1` on text-primary-key tables
+
+    Sqoop splits import workloads by numeric primary key ranges. Tables whose primary key is a text column cannot be split this way and will fail unless you force a single mapper. For this quickstart, every table in the DBImport schema either has a text primary key or is small enough that a single mapper is fine.
+
+    <Note>
+      The `UPDATE` statement below is safe only for a fresh installation where `import_tables` contains only the rows you just added. Never run a blanket `mappers = 1` update on a production system.
+    </Note>
+
+    ```sql
+    UPDATE import_tables SET mappers = 1;
+    ```
+
+    If you prefer to set mappers individually, the following tables require `mappers = 1`.
+
+    | Hive table | mappers |
+    |---|---|
+    | `airflow_custom_dags` | 1 |
+    | `airflow_dag_sensors` | 1 |
+    | `airflow_etl_dags` | 1 |
+    | `airflow_export_dags` | 1 |
+    | `airflow_import_dags` | 1 |
+    | `airflow_tasks` | 1 |
+    | `alembic_version` | 1 |
+    | `auto_discovered_tables` | 1 |
+    | `configuration` | 1 |
+    | `etl_jobs` | 1 |
+    | `export_retries_log` | 1 |
+    | `export_stage` | 1 |
+    | `export_stage_statistics` | 1 |
+    | `export_statistics_last` | 1 |
+    | `export_tables` | 1 |
+    | `import_failure_log` | 1 |
+    | `import_retries_log` | 1 |
+    | `import_stage` | 1 |
+    | `import_stage_statistics` | 1 |
+    | `import_statistics_last` | 1 |
+    | `import_tables` | 1 |
+    | `jdbc_connections` | 1 |
+    | `jdbc_connections_drivers` | 1 |
+    | `jdbc_table_change_history` | 1 |
+    | `table_change_history` | 1 |
+
   </Step>
+
+  <Step title="Run the First Import">
+
+    With the connection tested and table definitions in place, run a single-table import to verify the full pipeline works.
+
+    ```bash
+    ./import -h dbimport -t configuration
+    ```
+
+    | Flag | Meaning |
+    |---|---|
+    | `-h` | Hive destination database |
+    | `-t` | Hive destination table |
+
+    When the command completes, verify the result in Hive.
+
+    ```sql
+    SELECT * FROM dbimport.configuration;
+    ```
+
+    You should see the full contents of the DBImport `configuration` table reflected in Hive under `dbimport.configuration`.
+
+  </Step>
+
+  <Step title="Create and Trigger an Airflow DAG">
+
+    Now automate the import of all tables with an auto-generated Airflow DAG. DBImport creates the DAG Python file from the definitions stored in `airflow_import_dags`.
+
+    ### 1 — Add the DAG definition row
+
+    Insert the following row into the `airflow_import_dags` table.
+
+    | Column | Value |
+    |---|---|
+    | `dag_name` | `DBImport_dbimport` |
+    | `filter_hive` | `dbimport.*` |
+
+    The `filter_hive` glob controls which tables from `import_tables` are included in this DAG. `dbimport.*` selects every table in the `dbimport` Hive database.
+
+    ### 2 — Create an Airflow variable
+
+    Before generating the DAG, create a variable called `Email_receiver` in the Airflow UI with a valid email address. DBImport DAG templates reference this variable; Airflow will throw errors on load if it is missing.
+
+    ### 3 — Generate the DAG file
+
+    ```bash
+    ./manage --airflowGenerate --airflowDAG=DBImport_dbimport
+    ```
+
+    The DAG file is written to the directory configured as `airflow_dag_staging_directory` in the `configuration` table. To write simultaneously to the live Airflow DAG folder (`airflow_dag_directory`), add the `-w` flag.
+
+    ```bash
+    ./manage --airflowGenerate --airflowDAG=DBImport_dbimport -w
+    ```
+
+    ### 4 — Trigger the DAG
+
+    Open the Airflow UI, locate `DBImport_dbimport`, un-pause it, and trigger a manual run. Tasks will turn dark-green as they succeed. Expect a small number of failures on the first run — the section below explains the two known causes and how to resolve them.
+
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+---
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+## Resolving Known First-Run Issues
+
+<Warning>
+  Two categories of failure are expected on the first run of this specific quickstart. Both are easy to fix with a one-time configuration change.
+</Warning>
+
+<Accordion title="Reserved column name: 'datalake_source'">
+
+DBImport reserves all column names that begin with `datalake_`. The column `datalake_source` exists in both the `jdbc_connections` and `import_tables` source tables, causing those two imports to fail.
+
+**Affected tables:** `jdbc_connections`, `import_tables`
+
+**Fix:** Override the column name at import time using `column_name_override`.
+
+1. In your SQL client, query `import_columns` filtering for `column_name = 'datalake_source'`.
+2. For both matching rows, set `column_name_override` to `dl_source`.
+3. In the Airflow UI, clear the `import_tables_clearStage` and `jdbc_connections_clearStage` tasks to force DBImport to restart those imports from the beginning.
+
+</Accordion>
+
+<Accordion title="Validation failures on live-updating tables">
+
+DBImport validates each import by comparing the row count it reads from the source against the row count Sqoop or Spark actually loaded. Tables that log stage information, statistics, or retries — such as `import_stage`, `import_stage_statistics`, and `import_columns` — are actively written to while the import is running, so the source row count changes between the pre-import check and the post-import check.
+
+**Affected tables:** `import_stage_statistics`, `import_columns`, `import_stage`
+
+**Fix:** Switch those tables to trust the row count reported by Sqoop rather than re-querying the source.
+
+1. In your SQL client, query `import_tables` filtering for the affected Hive table names.
+2. Set the `validate_source` column to `sqoop` for each affected row.
+3. Clear the corresponding `_clearStage` tasks in Airflow to force a re-run from the start.
+
+</Accordion>
+
+---
+
+## What You Have Built
+
+After completing this guide you have a fully operational DBImport pipeline:
+
+- A JDBC connection definition with encrypted credentials stored in `jdbc_connections`
+- Import definitions for every table in the DBImport schema registered in `import_tables`
+- A verified single-table import of `dbimport.configuration` into Hive
+- An Airflow DAG (`DBImport_dbimport`) that orchestrates all tables in parallel on a schedule
+
+From here, the process to ingest any new relational database into Hive is the same sequence: add a connection, run `--addImportTable`, adjust any table-level options, and generate a DAG.

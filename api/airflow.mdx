@@ -1,0 +1,508 @@
+---
+title: "REST API: Airflow DAG Management Endpoints"
+sidebarTitle: "Airflow DAGs"
+description: "Full reference for all /airflow REST API endpoints — list DAGs, generate DAG files, and full CRUD for import, export, and custom Airflow DAG definitions."
+---
+
+The Airflow endpoints manage the DAG definitions stored in the DBImport configuration database and the generation of actual Airflow DAG Python files on disk. DBImport supports three DAG types: **import** (orchestrates import jobs filtered by Hive table), **export** (orchestrates export jobs filtered by connection/schema/table), and **custom** (arbitrary task graphs). All endpoints require a valid Bearer token.
+
+<Note>
+  DAG files on disk are generated via `GET /airflow/generate_dag`. Updating a DAG record in the database does not automatically regenerate the DAG file unless `autoRegenerateDag` is enabled on the DAG record or you call the generate endpoint explicitly.
+</Note>
+
+---
+
+## GET /airflow/dags
+
+Returns a consolidated list of all DAGs across all three types (import, export, custom).
+
+**Authentication:** Bearer token required
+
+### Response Fields
+
+<ResponseField name="name" type="string" required>
+  DAG name (unique across all types).
+</ResponseField>
+
+<ResponseField name="type" type="string" required>
+  DAG type: `import`, `export`, or `custom`.
+</ResponseField>
+
+<ResponseField name="scheduleInterval" type="string">
+  Airflow schedule interval (cron expression or `@daily`, `@hourly`, etc.).
+</ResponseField>
+
+<ResponseField name="autoRegenerateDag" type="boolean" required>
+  Whether the DAG file is automatically regenerated when configuration changes.
+</ResponseField>
+
+---
+
+## GET /airflow/generate\_dag
+
+Generates (or regenerates) the Airflow DAG Python file on disk for the named DAG. The file is written to the directory configured via `airflow_dag_directory`.
+
+**Authentication:** Bearer token required
+
+### Query Parameters
+
+<ParamField query="dagname" type="string" required>
+  The name of the DAG to generate.
+</ParamField>
+
+### Response
+
+Returns a plain-text message confirming generation success or an error description. HTTP `200` on success, HTTP `500` on failure.
+
+---
+
+## Import DAG Endpoints
+
+Import DAGs orchestrate DBImport ingestion jobs. Tables to include are selected by applying the DAG's `filterTable` pattern against registered import table definitions.
+
+### GET /airflow/dags/import
+
+Returns a summary list of all import DAG definitions.
+
+**Authentication:** Bearer token required
+
+#### Response Fields
+
+<ResponseField name="name" type="string" required>
+  DAG name.
+</ResponseField>
+
+<ResponseField name="filterTable" type="string">
+  Glob/regex pattern used to select which import tables belong to this DAG.
+</ResponseField>
+
+<ResponseField name="scheduleInterval" type="string">
+  Airflow schedule interval.
+</ResponseField>
+
+<ResponseField name="autoRegenerateDag" type="boolean" required>
+  Auto-regeneration flag.
+</ResponseField>
+
+<ResponseField name="airflowLink" type="string">
+  Direct URL to this DAG in the Airflow UI.
+</ResponseField>
+
+<ResponseField name="timezone" type="string">
+  DAG-level timezone override.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Alert email address.
+</ResponseField>
+
+<ResponseField name="emailOnFailure" type="boolean">
+  Send email notifications on task failure.
+</ResponseField>
+
+<ResponseField name="emailOnRetries" type="boolean">
+  Send email notifications on task retry.
+</ResponseField>
+
+<ResponseField name="slaWarningTime" type="string">
+  SLA warning threshold (e.g. `01:00:00`).
+</ResponseField>
+
+<ResponseField name="concurrency" type="integer">
+  Maximum number of concurrently-running tasks in this DAG.
+</ResponseField>
+
+---
+
+### POST /airflow/dags/import
+
+Bulk-updates one or more import DAG records. Only supplied fields are applied.
+
+**Authentication:** Bearer token required
+
+#### Request Body
+
+<ParamField body="dags" type="array" required>
+  List of `{name}` objects identifying the DAGs to update.
+</ParamField>
+
+<ParamField body="scheduleInterval" type="string">
+  New schedule interval to apply.
+</ParamField>
+
+<ParamField body="autoRegenerateDag" type="boolean">
+  New auto-regeneration setting.
+</ParamField>
+
+<ParamField body="operatorNotes" type="string">
+  Operator notes to apply to all listed DAGs.
+</ParamField>
+
+<ParamField body="sudoUser" type="string">
+  Linux user to sudo to when running DAG tasks.
+</ParamField>
+
+<ParamField body="timezone" type="string">
+  Timezone override for all listed DAGs.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Alert email address.
+</ParamField>
+
+<ParamField body="emailOnFailure" type="boolean">
+  Enable failure email alerts.
+</ParamField>
+
+<ParamField body="emailOnRetries" type="boolean">
+  Enable retry email alerts.
+</ParamField>
+
+<ParamField body="slaWarningTime" type="string">
+  SLA warning threshold.
+</ParamField>
+
+<ParamField body="concurrency" type="integer">
+  Maximum concurrent tasks.
+</ParamField>
+
+#### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Ok"` on success.
+</ResponseField>
+
+---
+
+### DELETE /airflow/dags/import
+
+Bulk-deletes one or more import DAG records.
+
+**Authentication:** Bearer token required
+
+#### Request Body
+
+An array of `{name}` objects:
+
+<ParamField body="[].name" type="string" required>
+  DAG name to delete.
+</ParamField>
+
+#### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Ok"` on success.
+</ResponseField>
+
+---
+
+### GET /airflow/dags/import/\{dagname\}
+
+Returns the full detail record for a single import DAG, including all tasks.
+
+**Authentication:** Bearer token required
+
+#### Path Parameters
+
+<ParamField path="dagname" type="string" required>
+  The DAG name to retrieve.
+</ParamField>
+
+#### Response Fields
+
+All fields from the list endpoint plus:
+
+<ResponseField name="filterTable" type="string">
+  Table filter pattern for this DAG.
+</ResponseField>
+
+<ResponseField name="finishAllStage1First" type="boolean">
+  Whether all stage-1 (import) tasks must complete before stage-2 (ETL) tasks begin.
+</ResponseField>
+
+<ResponseField name="runImportAndEtlSeparate" type="boolean">
+  Whether import and ETL phases run as separate Airflow task groups.
+</ResponseField>
+
+<ResponseField name="retries" type="integer">
+  Default retry count for tasks.
+</ResponseField>
+
+<ResponseField name="retriesStage1" type="integer">
+  Retry count for stage-1 (import) tasks.
+</ResponseField>
+
+<ResponseField name="retriesStage2" type="integer">
+  Retry count for stage-2 (ETL) tasks.
+</ResponseField>
+
+<ResponseField name="poolStage1" type="string">
+  Airflow pool name for stage-1 tasks.
+</ResponseField>
+
+<ResponseField name="poolStage2" type="string">
+  Airflow pool name for stage-2 tasks.
+</ResponseField>
+
+<ResponseField name="metadataImport" type="boolean">
+  Whether metadata-import tasks are included in this DAG.
+</ResponseField>
+
+<ResponseField name="retryExponentialBackoff" type="boolean">
+  Whether exponential backoff is used for retries.
+</ResponseField>
+
+<ResponseField name="tags" type="string">
+  Comma-separated Airflow tags applied to this DAG.
+</ResponseField>
+
+<ResponseField name="tasks" type="array">
+  List of custom task overrides. See the task fields below.
+
+  <Expandable title="Task fields">
+    <ResponseField name="name" type="string">Task name.</ResponseField>
+    <ResponseField name="type" type="string">Task type (e.g. `shell`, `sensor`, `dummy`).</ResponseField>
+    <ResponseField name="placement" type="string">Where the task is placed in the DAG: `before stages`, `after stages`, `in stage1`, `in stage2`.</ResponseField>
+    <ResponseField name="connection" type="string">Connection alias associated with this task.</ResponseField>
+    <ResponseField name="airflowPool" type="string">Airflow pool to assign this task to.</ResponseField>
+    <ResponseField name="airflowPriority" type="integer">Task priority weight.</ResponseField>
+    <ResponseField name="includeInAirflow" type="boolean">Whether this task is active.</ResponseField>
+    <ResponseField name="taskDependencyDownstream" type="string">Comma-separated downstream task dependencies.</ResponseField>
+    <ResponseField name="taskDependencyUpstream" type="string">Comma-separated upstream task dependencies.</ResponseField>
+    <ResponseField name="taskConfig" type="string">Task-specific configuration string.</ResponseField>
+    <ResponseField name="sensorPokeInterval" type="integer">Poll interval in seconds (sensor tasks only).</ResponseField>
+    <ResponseField name="sensorTimeoutMinutes" type="integer">Timeout in minutes (sensor tasks only).</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### POST /airflow/dags/import/\{dagname\}
+
+Creates or updates a single import DAG definition (upsert).
+
+**Authentication:** Bearer token required
+
+#### Path Parameters
+
+<ParamField path="dagname" type="string" required>
+  The DAG name to create or update.
+</ParamField>
+
+#### Request Body
+
+All fields from the `airflowImportDag` model. Key writable fields:
+
+<ParamField body="name" type="string" required>
+  DAG name (must match the path parameter).
+</ParamField>
+
+<ParamField body="scheduleInterval" type="string">
+  Airflow cron schedule or preset (e.g. `@daily`).
+</ParamField>
+
+<ParamField body="filterTable" type="string">
+  Table filter pattern to select which tables are included.
+</ParamField>
+
+<ParamField body="autoRegenerateDag" type="boolean">
+  Automatically regenerate the DAG file on configuration change.
+</ParamField>
+
+<ParamField body="retries" type="integer">
+  Default retry count.
+</ParamField>
+
+<ParamField body="tasks" type="array">
+  Array of custom task definitions.
+</ParamField>
+
+#### Response
+
+Returns `"ok"` with HTTP `200` on success, or an error with HTTP `500`.
+
+---
+
+### DELETE /airflow/dags/import/\{dagname\}
+
+Deletes a single import DAG definition and all its task records.
+
+**Authentication:** Bearer token required
+
+#### Path Parameters
+
+<ParamField path="dagname" type="string" required>
+  The DAG name to delete.
+</ParamField>
+
+#### Response
+
+Returns `"ok"` with HTTP `200` on success.
+
+---
+
+### DELETE /airflow/dags/import/\{dagname\}/\{taskname\}
+
+Removes a single custom task from an import DAG without deleting the DAG itself.
+
+**Authentication:** Bearer token required
+
+#### Path Parameters
+
+<ParamField path="dagname" type="string" required>
+  The parent DAG name.
+</ParamField>
+
+<ParamField path="taskname" type="string" required>
+  The task name to remove.
+</ParamField>
+
+#### Response
+
+Returns `"ok"` with HTTP `200` on success.
+
+---
+
+## Export DAG Endpoints
+
+Export DAGs orchestrate DBImport export jobs. Tables are selected by applying `filterConnection`, `filterTargetSchema`, and `filterTargetTable` patterns against registered export table definitions. The export DAG endpoints follow the same structure as the import DAG endpoints.
+
+<Tabs>
+  <Tab title="List">
+    **GET /airflow/dags/export** — Same response shape as `GET /airflow/dags/import` with the addition of `filterConnection`, `filterTargetSchema`, and `filterTargetTable` filter fields instead of `filterTable`.
+  </Tab>
+  <Tab title="Bulk Update">
+    **POST /airflow/dags/export** — Same request body as `POST /airflow/dags/import`.
+  </Tab>
+  <Tab title="Bulk Delete">
+    **DELETE /airflow/dags/export** — Same request body as `DELETE /airflow/dags/import`.
+  </Tab>
+  <Tab title="Get One">
+    **GET /airflow/dags/export/\{dagname\}** — Returns full detail including `filterConnection`, `filterTargetSchema`, `filterTargetTable`, and `tasks`.
+  </Tab>
+  <Tab title="Create/Update">
+    **POST /airflow/dags/export/\{dagname\}** — Upserts a single export DAG. Accepts all `airflowExportDag` fields.
+  </Tab>
+  <Tab title="Delete">
+    **DELETE /airflow/dags/export/\{dagname\}** — Deletes the named export DAG.
+  </Tab>
+  <Tab title="Delete Task">
+    **DELETE /airflow/dags/export/\{dagname\}/\{taskname\}** — Removes a single task from the export DAG.
+  </Tab>
+</Tabs>
+
+### Export DAG-Specific Response Fields
+
+<ResponseField name="filterConnection" type="string">
+  Connection alias filter pattern for selecting export tables.
+</ResponseField>
+
+<ResponseField name="filterTargetSchema" type="string">
+  Target schema filter pattern.
+</ResponseField>
+
+<ResponseField name="filterTargetTable" type="string">
+  Target table filter pattern.
+</ResponseField>
+
+---
+
+## Custom DAG Endpoints
+
+Custom DAGs provide a free-form task graph where every task is manually defined. There are no filter-based auto-population mechanisms. The endpoints follow the same structure as import and export DAG endpoints.
+
+<Tabs>
+  <Tab title="List">
+    **GET /airflow/dags/custom** — Returns summary list of all custom DAGs. Same fields as import DAG list minus filter fields.
+  </Tab>
+  <Tab title="Bulk Update">
+    **POST /airflow/dags/custom** — Same request body as `POST /airflow/dags/import`.
+  </Tab>
+  <Tab title="Bulk Delete">
+    **DELETE /airflow/dags/custom** — Same request body as `DELETE /airflow/dags/import`.
+  </Tab>
+  <Tab title="Get One">
+    **GET /airflow/dags/custom/\{dagname\}** — Returns full detail including all tasks.
+  </Tab>
+  <Tab title="Create/Update">
+    **POST /airflow/dags/custom/\{dagname\}** — Upserts a single custom DAG. Accepts all `airflowCustomDag` fields.
+  </Tab>
+  <Tab title="Delete">
+    **DELETE /airflow/dags/custom/\{dagname\}** — Deletes the named custom DAG.
+  </Tab>
+  <Tab title="Delete Task">
+    **DELETE /airflow/dags/custom/\{dagname\}/\{taskname\}** — Removes a single task from the custom DAG.
+  </Tab>
+</Tabs>
+
+### Shared DAG Request/Response Fields (all types)
+
+The following fields are common to the detail view of all three DAG types:
+
+<ResponseField name="scheduleInterval" type="string">
+  Airflow schedule interval (cron or preset string).
+</ResponseField>
+
+<ResponseField name="retries" type="integer">
+  Default number of task retries.
+</ResponseField>
+
+<ResponseField name="operatorNotes" type="string">
+  Internal notes for operators.
+</ResponseField>
+
+<ResponseField name="applicationNotes" type="string">
+  Application-level notes or documentation links.
+</ResponseField>
+
+<ResponseField name="airflowNotes" type="string">
+  Notes that appear in the generated DAG Python file as comments.
+</ResponseField>
+
+<ResponseField name="autoRegenerateDag" type="boolean">
+  Whether changes automatically regenerate the DAG file.
+</ResponseField>
+
+<ResponseField name="sudoUser" type="string">
+  Linux user account for task execution via sudo.
+</ResponseField>
+
+<ResponseField name="timezone" type="string">
+  Timezone for DAG scheduling (e.g. `Europe/Stockholm`).
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Alert email address.
+</ResponseField>
+
+<ResponseField name="emailOnFailure" type="boolean">
+  Send email on task failure.
+</ResponseField>
+
+<ResponseField name="emailOnRetries" type="boolean">
+  Send email on task retry.
+</ResponseField>
+
+<ResponseField name="tags" type="string">
+  Comma-separated Airflow tags.
+</ResponseField>
+
+<ResponseField name="slaWarningTime" type="string">
+  SLA breach warning threshold.
+</ResponseField>
+
+<ResponseField name="retryExponentialBackoff" type="integer">
+  Whether retries use exponential backoff: `0` = off, `1` = on.
+</ResponseField>
+
+<ResponseField name="concurrency" type="integer">
+  Maximum concurrently-running tasks.
+</ResponseField>
+
+<ResponseField name="airflowLink" type="string">
+  URL to this DAG in the Airflow web UI.
+</ResponseField>
+
+<ResponseField name="tasks" type="array">
+  Array of task definitions (see task fields in the import DAG section above).
+</ResponseField>

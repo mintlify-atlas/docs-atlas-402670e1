@@ -1,0 +1,131 @@
+---
+title: "Replicating Imports Across Multiple Hadoop Clusters"
+sidebarTitle: "Multi-Cluster"
+description: "Sync imported data to multiple Hadoop clusters with DBImport's distcp-based copy — without doubling the load on source databases."
+---
+
+Many organisations run more than one Hadoop environment — for example, a production cluster and a disaster-recovery cluster, or separate clusters for different business units. The naive solution is to run the same import independently on every cluster, but that multiplies the read load on the source database proportionally to the number of clusters. DBImport's multi-cluster import feature solves this: data is read from the source system exactly once, and DBImport handles distributing the HDFS data to every destination cluster automatically.
+
+## Copy Modes
+
+DBImport supports two copy strategies. The right choice depends on how much latency is acceptable on the primary cluster and how critical it is to keep both clusters in lockstep.
+
+<CardGroup cols={2}>
+  <Card title="Synchronous Copy" icon="arrows-rotate">
+    **distcp** runs inline — after the Spark or Sqoop command completes but before Hive ingestion begins. The primary cluster waits for the copy to finish before proceeding to ETL. Simpler to reason about, but adds distcp latency to every import run on the primary cluster.
+  </Card>
+  <Card title="Asynchronous Copy" icon="bolt">
+    The import command signals the DBImport Server to handle the distcp in the background, then immediately proceeds to ETL on the primary cluster. The server retries automatically on failure, so transient outages on the remote cluster are handled without operator intervention.
+  </Card>
+</CardGroup>
+
+<Warning>
+  With asynchronous copy, an incremental import on the primary cluster will
+  **fail** if the previous run's remote copy has not yet completed. This is by
+  design — starting the next incremental cycle before the previous data lands
+  on the remote cluster would cause data loss there.
+</Warning>
+
+## Configuration
+
+### Step 1 — Register the Remote Instance
+
+Add a row to the `dbimport_instances` table for each remote cluster:
+
+| Column | Description |
+|---|---|
+| `name` | Logical name for the connection, typically the remote cluster name as defined in HDFS. |
+| `db_hostname` | Hostname of the MySQL server hosting the remote DBImport configuration database. |
+| `db_port` | Port of that MySQL server. |
+| `db_database` | Name of the DBImport database on the remote MySQL instance. |
+| `db_credentials` | Leave blank — credentials are encrypted in the next step. |
+| `hdfs_address` | HDFS address of the remote cluster, e.g. `hdfs://<CLUSTER>:8020`. |
+| `hdfs_basedir` | Base directory on the remote HDFS where copied data will be written. |
+
+After the row is saved, encrypt the remote MySQL credentials:
+
+```bash
+./manage --encryptInstance
+```
+
+### Step 2 — Define Which Tables to Copy
+
+Add rows to the `copy_tables` table to map Hive tables to a destination:
+
+| Column | Description |
+|---|---|
+| `hive_filter` | `<HIVE DB>.<HIVE TABLE>`. Wildcard supported — e.g. `testdb.*` copies all tables in `testdb`. |
+| `destination` | Name of the remote DBImport instance configured in `dbimport_instances`. |
+| `data_transfer` | `Asynchronous` or `Synchronous`. |
+
+## Running a Multi-Cluster Import
+
+No additional flags are needed at import time. Run the standard import command and DBImport automatically detects that the table is mapped for copying:
+
+- With **synchronous** mode, the import command runs distcp itself and blocks until the copy is complete.
+- With **asynchronous** mode, the import command sends a signal to DBImport Server and proceeds immediately to Hive ETL.
+
+The copy process also replicates `jdbc_connections`, `import_tables`, and `import_columns` data to the remote DBImport instance.
+
+### The `copy_slave` Flag
+
+On the remote cluster, each copied table's row in `import_tables` has `copy_slave = 1`. When the import command runs on the remote cluster for a `copy_slave` table, it skips the Sqoop or Spark phase entirely and goes straight to Hive ETL — it assumes the HDFS data is already fresh from the distcp copy.
+
+### The `copy_finished` Timestamp
+
+As soon as distcp completes and the data is available on the remote cluster, DBImport updates the `copy_finished` column in `import_tables` for that table. This timestamp is used by Airflow sensors on the remote cluster to know when fresh data has arrived and imports can begin.
+
+## Airflow Integration
+
+Both clusters need Airflow DAGs that start at the same time (or the remote cluster's DAG can start slightly later than the primary). The primary cluster's DAG looks identical to a standard import DAG. The remote cluster's DAG includes an additional **SQL Sensor** task per import table that polls the `copy_finished` column:
+
+```sql
+select count(*) from import_tables
+where
+   hive_db = '<HIVE DB>'
+   and hive_table = '<HIVE TABLE>'
+   and copy_finished >= '{{ next_execution_date.strftime('%Y-%m-%d %H:%M:%S.%f') }}'
+```
+
+The sensor passes — and the dependent Hive ETL tasks start — only when `copy_finished` contains a timestamp at or after the DAG's own `next_execution_date`. The Airflow connection used by this sensor must be named **DBImport** and configured with the same MySQL connection details as `dbimport.cfg`.
+
+<Note>
+  Both Airflow DAGs must start at the same time, or the remote cluster's DAG
+  must start before the source cluster's DAG. If the remote DAG starts after
+  the copy has already completed, the sensor will pass immediately.
+</Note>
+
+## Operational Commands
+
+### Copy an Entire DAG to the Remote Instance
+
+The most common operation when setting up a remote cluster is to replicate a full DAG configuration — including all associated `import_tables`, `import_columns`, and `jdbc_connections` rows — to the remote instance:
+
+```bash
+./copy --copyAirflowImportDAG --airflowDAG=<DAG NAME> --destination=<Remote DBImport Instance>
+```
+
+This also sets `copy_slave = 1` for every copied table on the remote instance. After running this command, generate the DAG on the remote instance and it will be ready to execute.
+
+### Copy Individual Hive Tables Between Clusters
+
+For history tables, incremental tables, or any other standalone Hive table that needs to be available on both clusters, use the export-and-copy workflow:
+
+<Steps>
+  <Step title="Export and copy the table">
+    Run on the **source** cluster. Exports the Hive table to HDFS and copies it to the remote location.
+
+    ```bash
+    ./copy --exportAndCopyTable
+    ```
+  </Step>
+  <Step title="Import the copied table">
+    Run on the **target** cluster. Reads the copied HDFS data and ingests it into Hive.
+
+    ```bash
+    ./copy --importCopiedTable
+    ```
+  </Step>
+</Steps>
+
+Both commands use `localHDFSpath` and `remoteHDFSpath` to locate the data. A common convention is to set these to the `hdfs_basedir` value from each cluster's `configuration` table.

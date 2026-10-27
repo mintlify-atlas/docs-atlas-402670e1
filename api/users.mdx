@@ -1,0 +1,289 @@
+---
+title: "REST API: User Management Endpoints"
+sidebarTitle: "Users"
+description: "Full reference for the /users REST API endpoints — create, retrieve, update, change password, and delete DBImport REST API user accounts."
+---
+
+The user management endpoints control access to the DBImport REST API. Users are stored in the `auth_users` table of the DBImport configuration database. DBImport supports two authentication methods — `local` (bcrypt-hashed passwords stored in the database, optionally backed by AWS Secrets Manager) and `pam` (PAM-based system authentication). Password changes are only supported for the `local` method. All endpoints require a valid Bearer token.
+
+<Note>
+  The admin user is defined by the `restserver_admin_user` configuration key. If the admin user record does not exist in the database at startup, it is automatically created with the password `admin`. **Change this password immediately after first deployment.**
+</Note>
+
+---
+
+## POST /users/createUser
+
+Creates a new user account. The submitted password is bcrypt-hashed before storage (unless it is an AWS Secrets Manager ARN, which is stored as-is).
+
+**Authentication:** Bearer token required — **admin only**
+
+<Warning>
+  Only the configured admin user can call this endpoint. Non-admin calls return HTTP `403`.
+</Warning>
+
+### Request Body
+
+<ParamField body="username" type="string" required>
+  Unique username for the new account.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password (will be bcrypt-hashed on storage). Alternatively, supply an AWS Secrets Manager ARN in the format `arn:aws:secretsmanager:<region>:<account>:secret:<name>` — this is stored verbatim and resolved at authentication time.
+</ParamField>
+
+<ParamField body="disabled" type="boolean" required>
+  Whether the account is immediately disabled. Set to `false` for active accounts.
+</ParamField>
+
+<ParamField body="fullname" type="string">
+  User's full display name.
+</ParamField>
+
+<ParamField body="department" type="string">
+  Department or team name.
+</ParamField>
+
+<ParamField body="email" type="string">
+  User's email address (used for alert notifications if configured).
+</ParamField>
+
+### Response
+
+Returns `"User created successfully"` with HTTP `200` on success.
+
+Returns HTTP `409` if a user with that username already exists.
+
+Returns HTTP `403` if the caller is not the admin user.
+
+```json title="Example request"
+{
+  "username": "alice",
+  "password": "s3cur3P@ssw0rd",
+  "disabled": false,
+  "fullname": "Alice Andersen",
+  "department": "Data Engineering",
+  "email": "alice@example.com"
+}
+```
+
+---
+
+## GET /users/\{user\}
+
+Returns the detail record for a specific user. The `password` field is always masked as `"<encrypted>"` in the response (unless the password is an AWS Secrets Manager ARN reference, in which case it is also masked).
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="user" type="string" required>
+  Username of the account to retrieve.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="username" type="string" required>
+  The account username.
+</ResponseField>
+
+<ResponseField name="password" type="string" required>
+  Always returned as `"<encrypted>"` — the actual hash is never exposed.
+</ResponseField>
+
+<ResponseField name="disabled" type="boolean" required>
+  Whether the account is disabled. Disabled users cannot authenticate.
+</ResponseField>
+
+<ResponseField name="fullname" type="string">
+  User's full display name.
+</ResponseField>
+
+<ResponseField name="department" type="string">
+  Department or team.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Email address.
+</ResponseField>
+
+Returns HTTP `404` if the user does not exist.
+
+```json title="Example response"
+{
+  "username": "alice",
+  "password": "<encrypted>",
+  "disabled": false,
+  "fullname": "Alice Andersen",
+  "department": "Data Engineering",
+  "email": "alice@example.com"
+}
+```
+
+---
+
+## POST /users/\{user\}/update
+
+Updates one or more profile fields on an existing user account. Only the fields explicitly included in the request body are changed; omitted fields are left unchanged.
+
+**Authentication:** Bearer token required
+
+Non-admin users can only update their own account. Attempting to update another user's account as a non-admin returns HTTP `403`.
+
+### Path Parameters
+
+<ParamField path="user" type="string" required>
+  Username of the account to update.
+</ParamField>
+
+### Request Body
+
+<ParamField body="disabled" type="boolean">
+  Enable or disable the account. Non-admin users cannot disable their own account; only an admin can.
+</ParamField>
+
+<ParamField body="fullname" type="string">
+  Updated full display name.
+</ParamField>
+
+<ParamField body="department" type="string">
+  Updated department or team name.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Updated email address.
+</ParamField>
+
+### Response Fields
+
+Returns the updated user object (same shape as `GET /users/{user}`):
+
+<ResponseField name="username" type="string" required>
+  Account username.
+</ResponseField>
+
+<ResponseField name="password" type="string" required>
+  Always `"<encrypted>"`.
+</ResponseField>
+
+<ResponseField name="disabled" type="boolean" required>
+  Current disabled state after update.
+</ResponseField>
+
+<ResponseField name="fullname" type="string">
+  Updated full name.
+</ResponseField>
+
+<ResponseField name="department" type="string">
+  Updated department.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Updated email.
+</ResponseField>
+
+Returns HTTP `404` if the user does not exist. Returns HTTP `403` for unauthorised cross-user updates.
+
+```json title="Example request"
+{
+  "email": "alice.andersen@newdomain.com",
+  "department": "Platform Engineering"
+}
+```
+
+---
+
+## POST /users/\{user\}/changePassword
+
+Changes the password for a user account. This endpoint is only available when `restserver_authentication_method` is `local`.
+
+**Authentication:** Bearer token required
+
+<Info>
+  Non-admin users must supply their current password via `old_password` and can only change their own password. The admin user can change any user's password without supplying `old_password`.
+</Info>
+
+### Path Parameters
+
+<ParamField path="user" type="string" required>
+  Username of the account whose password should be changed.
+</ParamField>
+
+### Request Body
+
+<ParamField body="new_password" type="string" required>
+  The new plain-text password. It will be bcrypt-hashed before storage.
+</ParamField>
+
+<ParamField body="old_password" type="string">
+  The current password. Required for non-admin users to verify identity. Not required when the admin changes another user's password.
+</ParamField>
+
+### Response
+
+Returns `"Password changed successfully"` with HTTP `200` on success.
+
+| HTTP Code | Condition |
+|-----------|-----------|
+| `200` | Password updated successfully |
+| `403` | Authentication method is not `local` |
+| `403` | Non-admin attempting to change another user's password |
+| `403` | `old_password` does not match the current password |
+| `404` | The specified user does not exist |
+
+---
+
+## DELETE /users/\{user\}/delete
+
+Permanently deletes a user account. The configured admin user account cannot be deleted.
+
+**Authentication:** Bearer token required — **admin only**
+
+<Warning>
+  Deleting a user is permanent and cannot be undone. The admin user (as defined by `restserver_admin_user`) is protected and cannot be deleted via this endpoint.
+</Warning>
+
+### Path Parameters
+
+<ParamField path="user" type="string" required>
+  Username of the account to delete.
+</ParamField>
+
+### Response
+
+Returns `"User deleted"` with HTTP `200` on success.
+
+| HTTP Code | Condition |
+|-----------|-----------|
+| `200` | User deleted successfully |
+| `403` | Caller is not the admin user |
+| `403` | Attempting to delete the protected admin user |
+| `404` | The specified user does not exist |
+
+---
+
+## Authentication Flow
+
+All protected endpoints require a JWT Bearer token. Obtain a token by posting credentials to the token endpoint:
+
+```bash title="Obtain an access token"
+curl -X POST https://dbimport.example.com/oauth2/access_token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=alice&password=s3cur3P%40ssw0rd"
+```
+
+```json title="Token response"
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
+}
+```
+
+Pass the token as a `Bearer` header on subsequent requests:
+
+```bash title="Authenticated request example"
+curl https://dbimport.example.com/users/alice \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+Token lifetime is controlled by the `restserver_token_ttl` configuration key (in minutes). Tokens are signed with HS256 using the `restserver_secret_key`.

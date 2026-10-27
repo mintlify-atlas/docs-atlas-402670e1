@@ -1,0 +1,240 @@
+---
+title: "DBImport REST API: Manage Everything Programmatically"
+sidebarTitle: "Overview"
+description: "Explore the DBImport REST API — a FastAPI application that lets you manage connections, imports, exports, Airflow DAGs, and global configuration over HTTP."
+---
+
+The DBImport REST API exposes the full power of the platform over HTTP, enabling you to automate connection management, configure import and export tables, generate Airflow DAGs, and adjust global settings without touching the database directly. The server is built with [FastAPI](https://fastapi.tiangolo.com/) and served through Gunicorn with Uvicorn workers, making it suitable for both interactive tooling and CI/CD pipelines.
+
+## Server startup
+
+The REST server is a standalone process separate from the main DBImport daemon. Start it with the `restServer` executable found in the `bin/` directory.
+
+```bash
+# Start as a background daemon
+./restServer start
+
+# Start in the foreground (useful for debugging)
+./restServer noDaemon
+
+# Stop the server
+./restServer stop
+
+# Restart the server
+./restServer restart
+
+# Check whether the server is running
+./restServer status
+```
+
+<Note>
+  `./mainServer` manages the main DBImport processing daemon, not the REST server. Use `./restServer` exclusively for the API process.
+</Note>
+
+The server binds to the address and port configured in the `[Server]` section of the DBImport configuration file (`restServer_address`, `restServer_port`, `restServer_workers`, `restServer_keyfile`, `restServer_certfile`).
+
+## Base URL
+
+All API requests are made to the host and port where the server is running:
+
+```text
+https://<host>:<port>
+```
+
+For example, if the server runs on `dbimport-server` at port `8080`:
+
+```text
+https://dbimport-server:8080
+```
+
+## Verifying the server
+
+The `/status` endpoint is unauthenticated and can be used to confirm that the server is reachable and to inspect the running version:
+
+```bash
+curl https://dbimport-server:8080/status
+```
+
+```json
+{
+  "status": "ok",
+  "version": "1.00.006"
+}
+```
+
+## Content type
+
+All request bodies must be sent as JSON and all responses are returned as JSON. Set the `Content-Type` header accordingly on write operations:
+
+```text
+Content-Type: application/json
+```
+
+## Authentication
+
+The API uses the **OAuth2 password flow**. Send your credentials to `/oauth2/access_token` to receive a short-lived JWT Bearer token, then include that token in the `Authorization` header of every subsequent request.
+
+```text
+Authorization: Bearer <token>
+```
+
+The `/status` and `/oauth2/access_token` endpoints are the only routes that do not require authentication. All other endpoints will return `401 Unauthorized` if a valid token is not present. See the [Authentication guide](/api/authentication) for the full flow, token TTL configuration, and supported authentication back-ends.
+
+## Server configuration
+
+The REST server reads several keys from the `configuration` table in the DBImport database at startup:
+
+| Configuration key | Description |
+|---|---|
+| `restserver_admin_user` | Username of the built-in administrator account |
+| `restserver_authentication_method` | Authentication back-end: `local` or `pam` |
+| `restserver_token_ttl` | Token lifetime in minutes |
+| `restserver_secret_key` | Secret used to sign JWT tokens — keep this value private |
+
+## API resource groups
+
+The API is organised into seven resource groups. Each group maps to a URL prefix and a logical domain within DBImport.
+
+<CardGroup cols={2}>
+  <Card title="Connections" icon="plug" href="/api/connections">
+    Create, read, update, and delete JDBC connection definitions. Test connectivity, encrypt credentials, and generate JDBC connection strings for supported database types.
+  </Card>
+  <Card title="Imports" icon="arrow-down-to-line" href="/api/imports">
+    Configure import table definitions, manage column mappings, trigger discovery of new source tables, and bulk-update or delete import jobs targeting the Hive data lakehouse.
+  </Card>
+  <Card title="Exports" icon="arrow-up-from-line" href="/api/exports">
+    Configure export table definitions from Hive to relational targets, discover exportable tables, and perform bulk operations across export jobs.
+  </Card>
+  <Card title="Airflow" icon="wind" href="/api/airflow">
+    Manage import, export, and custom Airflow DAG definitions. Generate DAG files on demand and add or remove individual tasks from a DAG without redeploying.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/api/configuration">
+    Read and update global DBImport configuration settings, including Hive, HDFS, Spark, Kafka, and REST notification parameters. Manage JDBC driver registrations.
+  </Card>
+  <Card title="Users" icon="users" href="/api/users">
+    Admin-only user lifecycle management: create, update, disable, and delete user accounts. Non-admin users can view and update their own profile and change their own password.
+  </Card>
+</CardGroup>
+
+## Endpoint summary
+
+The table below lists every route grouped by resource area. The `GET /status` and `POST /oauth2/access_token` routes are public; all others require a Bearer token.
+
+### General
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/status` | Returns server status and version. No auth required. |
+| `POST` | `/oauth2/access_token` | Obtain a JWT access token. No auth required. |
+
+### Connections — `/connection`
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/connection` | List all connections |
+| `POST` | `/connection` | Create or update a connection |
+| `GET` | `/connection/{connection}` | Get details for a specific connection |
+| `DELETE` | `/connection/{connection}` | Delete a connection |
+| `POST` | `/connection/search` | Search connections by field values |
+| `GET` | `/connection/testConnection/{connection}` | Test JDBC connectivity |
+| `POST` | `/connection/encryptCredentials` | Encrypt and store JDBC credentials |
+| `POST` | `/connection/generateJDBCconnectionString` | Generate a JDBC URL for a given database type |
+
+### Imports — `/import`
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/import/db` | List all import databases |
+| `POST` | `/import/search` | Search import table definitions |
+| `POST` | `/import/discover/search` | Discover source tables available for import |
+| `POST` | `/import/discover/add` | Add discovered tables as import definitions |
+| `GET` | `/import/table/{connection}` | List import tables for a connection |
+| `GET` | `/import/table/{database}` | List import tables in a Hive database |
+| `GET` | `/import/table/{database}/{table}` | Get full import table configuration |
+| `POST` | `/import/table/{database}/{table}` | Create or update an import table |
+| `DELETE` | `/import/table/{database}/{table}` | Delete an import table definition |
+| `POST` | `/import/table/{database}/{table}/repair` | Repair an import table |
+| `POST` | `/import/table/{database}/{table}/reset` | Reset import state for a table |
+| `POST` | `/import/table` | Bulk update import tables |
+| `DELETE` | `/import/table` | Bulk delete import tables |
+
+### Exports — `/export`
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/export/connection` | List connections that have export definitions |
+| `POST` | `/export/search` | Search export table definitions |
+| `POST` | `/export/discover/search` | Discover Hive tables available for export |
+| `POST` | `/export/discover/add` | Add discovered tables as export definitions |
+| `GET` | `/export/table/{connection}` | List export tables on a connection |
+| `GET` | `/export/table/{connection}/{schema}` | List export tables for a connection and schema |
+| `GET` | `/export/table/{connection}/{schema}/{table}` | Get full export table configuration |
+| `POST` | `/export/table/{connection}/{schema}/{table}` | Create or update an export table |
+| `DELETE` | `/export/table/{connection}/{schema}/{table}` | Delete an export table definition |
+| `POST` | `/export/table/{connection}/{schema}/{table}/repair` | Repair an export table |
+| `POST` | `/export/table/{connection}/{schema}/{table}/reset` | Reset export state for a table |
+| `POST` | `/export/table` | Bulk update export tables |
+| `DELETE` | `/export/table` | Bulk delete export tables |
+
+### Airflow — `/airflow`
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/airflow/dags` | List all DAGs (import, export, and custom) |
+| `GET` | `/airflow/generate_dag` | Generate a DAG file by DAG name |
+| `GET` | `/airflow/dags/import` | List import DAGs |
+| `POST` | `/airflow/dags/import` | Bulk update import DAGs |
+| `DELETE` | `/airflow/dags/import` | Bulk delete import DAGs |
+| `GET` | `/airflow/dags/import/{dagname}` | Get an import DAG definition |
+| `POST` | `/airflow/dags/import/{dagname}` | Create or update an import DAG |
+| `DELETE` | `/airflow/dags/import/{dagname}` | Delete an import DAG |
+| `DELETE` | `/airflow/dags/import/{dagname}/{taskname}` | Remove a task from an import DAG |
+| `GET` | `/airflow/dags/export` | List export DAGs |
+| `POST` | `/airflow/dags/export` | Bulk update export DAGs |
+| `DELETE` | `/airflow/dags/export` | Bulk delete export DAGs |
+| `GET` | `/airflow/dags/export/{dagname}` | Get an export DAG definition |
+| `POST` | `/airflow/dags/export/{dagname}` | Create or update an export DAG |
+| `DELETE` | `/airflow/dags/export/{dagname}` | Delete an export DAG |
+| `DELETE` | `/airflow/dags/export/{dagname}/{taskname}` | Remove a task from an export DAG |
+| `GET` | `/airflow/dags/custom` | List custom DAGs |
+| `POST` | `/airflow/dags/custom` | Bulk update custom DAGs |
+| `DELETE` | `/airflow/dags/custom` | Bulk delete custom DAGs |
+| `GET` | `/airflow/dags/custom/{dagname}` | Get a custom DAG definition |
+| `POST` | `/airflow/dags/custom/{dagname}` | Create or update a custom DAG |
+| `DELETE` | `/airflow/dags/custom/{dagname}` | Delete a custom DAG |
+| `DELETE` | `/airflow/dags/custom/{dagname}/{taskname}` | Remove a task from a custom DAG |
+
+### Configuration — `/config`
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/config/getConfig` | Read global configuration |
+| `POST` | `/config/updateConfig` | Update global configuration |
+| `GET` | `/config/getJDBCdrivers` | List registered JDBC drivers |
+| `POST` | `/config/updateJDBCdriver` | Add or update a JDBC driver |
+
+### Users — `/users`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/users/createUser` | Create a new user (admin only) |
+| `GET` | `/users/{user}` | Get user details |
+| `POST` | `/users/{user}/update` | Update user profile |
+| `DELETE` | `/users/{user}/delete` | Delete a user (admin only) |
+| `POST` | `/users/{user}/changePassword` | Change a user's password (local auth only) |
+
+## Interactive API explorer
+
+FastAPI automatically generates an OpenAPI schema for the DBImport REST server. Once your server is running, visit the built-in Swagger UI at:
+
+```text
+https://<host>:<port>/docs
+```
+
+Or use the alternative ReDoc interface at:
+
+```text
+https://<host>:<port>/redoc
+```
+
+These pages let you explore every endpoint, inspect request and response schemas, and execute calls directly from your browser.

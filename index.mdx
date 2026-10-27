@@ -1,20 +1,84 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "DBImport: ELT Ingestion for Hadoop and Hive"
+sidebarTitle: "Home"
+description: "DBImport automates importing and exporting data between relational databases and Hadoop/Hive, with Airflow scheduling, schema change detection, and Apache Atlas lineage."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+DBImport is an ELT ingestion tool that handles the full lifecycle of moving data between relational databases (Oracle, MSSQL, MySQL, DB2, PostgreSQL, Snowflake, and more) and your Hadoop/Hive data lakehouse. It automates table discovery, schema change propagation, incremental ingestion, Airflow DAG generation, and data governance via Apache Atlas — so you spend time on analytics, not pipelines.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Import your first table into Hive in five steps.
+  </Card>
+  <Card title="Installation" icon="wrench" href="/installation">
+    Set up DBImport on your Hadoop cluster from scratch.
+  </Card>
+  <Card title="Import Methods" icon="database" href="/concepts/import-methods">
+    Full, incremental, CDC, and Oracle Flashback ingestion patterns.
+  </Card>
+  <Card title="REST API" icon="code" href="/api/overview">
+    Manage connections, tables, and DAGs programmatically.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## Why DBImport?
+
+When source systems change their table schemas — renaming columns, adding fields, or altering types — traditional Sqoop scripts break silently. DBImport detects those changes automatically and propagates them to Hive, turning a production incident into a log entry.
+
+<CardGroup cols={3}>
+  <Card title="Auto Schema Sync" icon="arrows-rotate">
+    Detects column additions and type changes in source systems and updates Hive tables automatically.
+  </Card>
+  <Card title="Airflow DAGs" icon="diagram-project">
+    Generates production-ready Airflow DAGs from a single configuration row — no hand-written pipelines.
+  </Card>
+  <Card title="Multi-Cluster" icon="server">
+    Replicates imports to multiple Hadoop clusters via sync or async distcp without re-reading the source.
+  </Card>
+  <Card title="Change Data Capture" icon="clock-rotate-left">
+    Oracle Flashback Query and MSSQL Change Tracking supported for low-latency incremental ingestion.
+  </Card>
+  <Card title="Data Lineage" icon="share-nodes">
+    Apache Atlas integration registers every import and export with full source-to-target lineage graphs.
+  </Card>
+  <Card title="Validation" icon="shield-check">
+    Row count and custom SQL validation runs on every import and export to ensure data integrity.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Connect to a source database">
+    Add a JDBC connection to your source system — Oracle, MSSQL, MySQL, DB2, PostgreSQL, Snowflake, or AWS S3. Credentials are encrypted with an RSA keypair stored on the server.
+  </Step>
+  <Step title="Discover tables automatically">
+    Run `./manage --addImportTable -a <connection> -h <hive_db>` to scan the source and register all matching tables in the configuration database. Filters by schema or table name pattern.
+  </Step>
+  <Step title="Generate an Airflow DAG">
+    Insert a row into `airflow_import_dags` with a wildcard filter (e.g., `dbimport.*`), then run `./manage --airflowGenerate` to produce a fully-wired Airflow DAG file.
+  </Step>
+  <Step title="Run imports on a schedule">
+    The generated DAG runs on your configured interval. DBImport handles schema changes, row-count validation, history audit tables, and statistics — automatically, every run.
+  </Step>
+</Steps>
+
+## Supported Source Systems
+
+DBImport connects to any JDBC-accessible database. Supported types include:
+
+| Database | Import | Export | CDC |
+|----------|--------|--------|-----|
+| Oracle | ✓ | ✓ | Flashback Query |
+| Microsoft SQL Server | ✓ | ✓ | Change Tracking |
+| MySQL / MariaDB | ✓ | ✓ | — |
+| PostgreSQL | ✓ | ✓ | — |
+| DB2 UDB / AS400 | ✓ | ✓ | — |
+| Snowflake | ✓ | ✓ | — |
+| AWS S3 | — | ✓ | — |
+| MongoDB | ✓ | — | — |
+| Progress / OpenEdge | ✓ | — | — |
+
+<Note>
+  DBImport requires Python 3.6+, a MariaDB/MySQL configuration database, Kerberos authentication, and Hive with binary transport mode. See [Requirements](/requirements) for the full list.
+</Note>

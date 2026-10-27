@@ -1,0 +1,607 @@
+---
+title: "REST API: Export Table Configuration Endpoints"
+sidebarTitle: "Exports"
+description: "Complete reference for all /export REST API endpoints — list connections, discover tables, search, bulk update/delete, and manage individual export table definitions."
+---
+
+The export endpoints manage the configuration for pushing data from the Hive/datalake layer back to JDBC targets. An export table definition maps a source Hive database and table to a JDBC connection, target schema, and target table, along with all export settings including phase type, validation, incremental tracking, Sqoop options, and column mappings. All endpoints require a valid Bearer token.
+
+<Note>
+  List and search endpoints cap results at 1,000 rows. The `content-rows` and `content-max-returned-rows` response headers report the returned and maximum counts. Search endpoints additionally include `content-total-rows`.
+</Note>
+
+---
+
+## GET /export/connection
+
+Returns a summary of all JDBC connections that have at least one export table configured.
+
+**Authentication:** Bearer token required
+
+### Response Fields
+
+<ResponseField name="name" type="string" required>
+  JDBC connection alias name.
+</ResponseField>
+
+<ResponseField name="tables" type="integer" required>
+  Number of export tables configured on this connection.
+</ResponseField>
+
+<ResponseField name="lastExport" type="string">
+  Timestamp of the most recent completed export (`YYYY-MM-DD HH:MM:SS`).
+</ResponseField>
+
+<ResponseField name="lastRows" type="integer">
+  Total rows exported in the last run across all tables on this connection.
+</ResponseField>
+
+---
+
+## POST /export/discover/search
+
+Queries Hive for exportable tables and returns candidates not yet registered in DBImport export configuration. Results mirror the same structure passed to `POST /export/discover/add`.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="connection" type="string" required>
+  Target JDBC connection alias where tables will be exported.
+</ParamField>
+
+<ParamField body="targetSchema" type="string" required>
+  Target schema name on the JDBC destination.
+</ParamField>
+
+<ParamField body="databaseFilter" type="string">
+  Filter to restrict which Hive databases are scanned. Supports wildcards.
+</ParamField>
+
+<ParamField body="tableFilter" type="string">
+  Filter to restrict which Hive tables are scanned. Supports wildcards.
+</ParamField>
+
+<ParamField body="addDBToTable" type="boolean" required>
+  When `true`, the Hive database name is prepended to the target table name.
+</ParamField>
+
+<ParamField body="addCounterToTable" type="boolean" required>
+  When `true`, a numeric counter suffix is appended to avoid naming conflicts.
+</ParamField>
+
+<ParamField body="counterStart" type="integer">
+  Starting value for the counter suffix. Requires `addCounterToTable=true`.
+</ParamField>
+
+<ParamField body="addCustomText" type="string">
+  Custom text appended to every generated target table name.
+</ParamField>
+
+### Response Fields
+
+Returns an array of discoverable export tables:
+
+<ResponseField name="database" type="string" required>
+  Source Hive database name.
+</ResponseField>
+
+<ResponseField name="table" type="string" required>
+  Source Hive table name.
+</ResponseField>
+
+<ResponseField name="connection" type="string" required>
+  Target JDBC connection alias.
+</ResponseField>
+
+<ResponseField name="targetSchema" type="string" required>
+  Target schema on the JDBC destination.
+</ResponseField>
+
+<ResponseField name="targetTable" type="string" required>
+  Target table name on the JDBC destination.
+</ResponseField>
+
+---
+
+## POST /export/discover/add
+
+Registers a list of previously-discovered export tables into DBImport. Each table is created with default settings: `exportType=full`, `exportTool=spark`.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+An array of `discoverExportTable` objects (same shape returned by `POST /export/discover/search`):
+
+<ParamField body="[].database" type="string" required>
+  Source Hive database name.
+</ParamField>
+
+<ParamField body="[].table" type="string" required>
+  Source Hive table name.
+</ParamField>
+
+<ParamField body="[].connection" type="string" required>
+  Target JDBC connection alias.
+</ParamField>
+
+<ParamField body="[].targetSchema" type="string" required>
+  Target schema on the JDBC destination.
+</ParamField>
+
+<ParamField body="[].targetTable" type="string" required>
+  Target table name on the JDBC destination.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  Summary message such as `"3 tables created"`.
+</ResponseField>
+
+---
+
+## POST /export/search
+
+Searches and filters export table definitions. All fields are optional and support `*` or `%` wildcards.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="connection" type="string">
+  Filter by JDBC connection alias. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="targetSchema" type="string">
+  Filter by target schema name. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="targetTable" type="string">
+  Filter by target table name. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="database" type="string">
+  Filter by source Hive database. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="table" type="string">
+  Filter by source Hive table. Supports `*` wildcard.
+</ParamField>
+
+<ParamField body="exportType" type="string">
+  Filter by export type (e.g. `full`, `incr`).
+</ParamField>
+
+<ParamField body="exportTool" type="string">
+  Filter by export tool (`spark` or `sqoop`).
+</ParamField>
+
+<ParamField body="includeInAirflow" type="boolean">
+  Filter to tables included or excluded from Airflow scheduling.
+</ParamField>
+
+<ParamField body="operatorNotes" type="string">
+  Filter by operator notes text. Supports `*` wildcard.
+</ParamField>
+
+### Response Fields
+
+Same fields as `GET /export/table/{connection}` — see that endpoint for field definitions.
+
+---
+
+## POST /export/table
+
+Bulk-updates one or more export table records. Only the fields provided in the request body (besides `exportTables`) are applied; omitted optional fields are left unchanged.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+<ParamField body="exportTables" type="array" required>
+  List of `{connection, targetSchema, targetTable}` objects identifying the records to update.
+</ParamField>
+
+<ParamField body="exportType" type="string">
+  New export type to apply to all listed tables (e.g. `full`, `incr`).
+</ParamField>
+
+<ParamField body="exportTool" type="string">
+  New export tool: `spark` or `sqoop`.
+</ParamField>
+
+<ParamField body="includeInAirflow" type="boolean">
+  Whether to include these tables in Airflow DAG scheduling.
+</ParamField>
+
+<ParamField body="operatorNotes" type="string">
+  Operator notes to apply to all listed tables.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Ok"` on success.
+</ResponseField>
+
+---
+
+## DELETE /export/table
+
+Bulk-deletes one or more export table definitions. Associated column records are also removed.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+An array of primary key objects:
+
+<ParamField body="[].connection" type="string" required>
+  JDBC connection alias.
+</ParamField>
+
+<ParamField body="[].targetSchema" type="string" required>
+  Target schema name.
+</ParamField>
+
+<ParamField body="[].targetTable" type="string" required>
+  Target table name.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Ok"` on success, or an error description if the body was empty.
+</ResponseField>
+
+---
+
+## GET /export/table/\{connection\}
+
+Returns a list of all export tables associated with a given JDBC connection alias.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  JDBC connection alias to filter by.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="connection" type="string" required>
+  JDBC connection alias.
+</ResponseField>
+
+<ResponseField name="targetSchema" type="string" required>
+  Target schema on the JDBC destination.
+</ResponseField>
+
+<ResponseField name="targetTable" type="string" required>
+  Target table on the JDBC destination.
+</ResponseField>
+
+<ResponseField name="database" type="string" required>
+  Source Hive database name.
+</ResponseField>
+
+<ResponseField name="table" type="string" required>
+  Source Hive table name.
+</ResponseField>
+
+<ResponseField name="exportType" type="string" required>
+  Export mode: `full` or `incr`.
+</ResponseField>
+
+<ResponseField name="exportTool" type="string" required>
+  Export tool: `spark` or `sqoop`.
+</ResponseField>
+
+<ResponseField name="lastUpdateFromHive" type="string">
+  Timestamp of the last schema sync from Hive (`YYYY-MM-DD HH:MM:SS`).
+</ResponseField>
+
+<ResponseField name="includeInAirflow" type="boolean" required>
+  Whether this table is scheduled via Airflow.
+</ResponseField>
+
+<ResponseField name="operatorNotes" type="string">
+  Free-text operator notes.
+</ResponseField>
+
+---
+
+## GET /export/table/\{connection\}/\{schema\}
+
+Returns a list of all export tables within a specific connection and target schema.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  JDBC connection alias.
+</ParamField>
+
+<ParamField path="schema" type="string" required>
+  Target schema name to filter by.
+</ParamField>
+
+### Response Fields
+
+Same fields as `GET /export/table/{connection}`.
+
+---
+
+## GET /export/table/\{connection\}/\{schema\}/\{table\}
+
+Returns the full detail record for a single export table, including all export settings and optionally all column-level definitions.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  JDBC connection alias.
+</ParamField>
+
+<ParamField path="schema" type="string" required>
+  Target schema name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Target table name.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="includeColumns" type="boolean" default="true">
+  When `true`, the response includes a `columns` array with per-column configuration.
+</ParamField>
+
+### Response Fields
+
+All fields from `GET /export/table/{connection}` plus:
+
+<ResponseField name="sqlWhereAddition" type="string">
+  Extra SQL `WHERE` clause appended to the Hive read query.
+</ResponseField>
+
+<ResponseField name="airflowPriority" type="integer">
+  Task priority weight in Airflow.
+</ResponseField>
+
+<ResponseField name="forceCreateTempTable" type="boolean">
+  Whether to always create a temporary staging table during export.
+</ResponseField>
+
+<ResponseField name="validateExport" type="boolean">
+  Whether row-count validation is enabled after export.
+</ResponseField>
+
+<ResponseField name="validationMethod" type="string">
+  Validation strategy: `rowCount` or `customQuery`.
+</ResponseField>
+
+<ResponseField name="uppercaseColumns" type="integer">
+  Whether target column names are uppercased: `0` = off, `1` = on.
+</ResponseField>
+
+<ResponseField name="truncateTarget" type="boolean">
+  Whether the target table is truncated before a full export.
+</ResponseField>
+
+<ResponseField name="sqlSessions" type="integer">
+  Number of parallel SQL sessions/mappers.
+</ResponseField>
+
+<ResponseField name="incrColumn" type="string">
+  Column used as the incremental watermark.
+</ResponseField>
+
+<ResponseField name="incrValidationMethod" type="string">
+  Incremental validation method: `full` or `incr`.
+</ResponseField>
+
+<ResponseField name="sqoopOptions" type="string">
+  Additional Sqoop command-line options.
+</ResponseField>
+
+<ResponseField name="hiveContainerSize" type="integer">
+  Hive container/executor memory size in MB.
+</ResponseField>
+
+<ResponseField name="createTargetTableSql" type="string">
+  Custom `CREATE TABLE` SQL used to create the target table if it does not exist.
+</ResponseField>
+
+<ResponseField name="lastSize" type="integer">
+  Bytes transferred in the last export run.
+</ResponseField>
+
+<ResponseField name="lastRows" type="integer">
+  Rows transferred in the last export run.
+</ResponseField>
+
+<ResponseField name="lastExecution" type="integer">
+  Duration of the last export run in seconds.
+</ResponseField>
+
+<ResponseField name="columns" type="array">
+  Array of column definitions when `includeColumns=true`.
+
+  <Expandable title="Column fields">
+    <ResponseField name="columnName" type="string">Source Hive column name.</ResponseField>
+    <ResponseField name="columnType" type="string">Hive column type.</ResponseField>
+    <ResponseField name="columnOrder" type="integer">Column position (1-based).</ResponseField>
+    <ResponseField name="targetColumnName" type="string">Override name for the target JDBC column.</ResponseField>
+    <ResponseField name="targetColumnType" type="string">Override type for the target JDBC column.</ResponseField>
+    <ResponseField name="lastUpdateFromHive" type="string">Timestamp of last schema sync.</ResponseField>
+    <ResponseField name="includeInExport" type="boolean">Whether this column is included in the export.</ResponseField>
+    <ResponseField name="comment" type="string">Column comment.</ResponseField>
+    <ResponseField name="operatorNotes" type="string">Per-column operator notes.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+Returns HTTP `404` if the export table does not exist.
+
+---
+
+## POST /export/table/\{connection\}/\{schema\}/\{table\}
+
+Creates or updates a single export table definition (upsert). The path parameters set the target identity; all other fields come from the request body.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  JDBC connection alias for the export destination.
+</ParamField>
+
+<ParamField path="schema" type="string" required>
+  Target schema name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Target table name.
+</ParamField>
+
+### Request Body
+
+<ParamField body="exportType" type="string" required>
+  Export mode: `full` or `incr`.
+</ParamField>
+
+<ParamField body="exportTool" type="string" required>
+  Export tool: `spark` or `sqoop`.
+</ParamField>
+
+<ParamField body="database" type="string" required>
+  Source Hive database name.
+</ParamField>
+
+<ParamField body="table" type="string" required>
+  Source Hive table name.
+</ParamField>
+
+<ParamField body="includeInAirflow" type="boolean">
+  Include in Airflow scheduling.
+</ParamField>
+
+<ParamField body="validateExport" type="boolean">
+  Enable post-export row-count validation.
+</ParamField>
+
+<ParamField body="truncateTarget" type="boolean">
+  Truncate the target table before a full export.
+</ParamField>
+
+<ParamField body="sqlSessions" type="integer">
+  Number of parallel sessions/mappers.
+</ParamField>
+
+<ParamField body="incrColumn" type="string">
+  Watermark column for incremental export mode.
+</ParamField>
+
+<ParamField body="columns" type="array">
+  Optional array of column definitions to create or update alongside the table.
+</ParamField>
+
+### Response
+
+Returns `"ok"` with HTTP `200` on success, or an error message with HTTP `500`.
+
+---
+
+## DELETE /export/table/\{connection\}/\{schema\}/\{table\}
+
+Permanently deletes a single export table definition and its column records.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  JDBC connection alias.
+</ParamField>
+
+<ParamField path="schema" type="string" required>
+  Target schema name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Target table name.
+</ParamField>
+
+### Response
+
+Returns `"ok"` with HTTP `200` on success. Returns HTTP `404` with `"Table does not exist"` if not found.
+
+---
+
+## POST /export/table/\{connection\}/\{schema\}/\{table\}/repair
+
+Repairs the incremental export state by invoking `manage --repairIncrementalExport`. Use when the export watermark has become inconsistent.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  JDBC connection alias.
+</ParamField>
+
+<ParamField path="schema" type="string" required>
+  Target schema name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Target table name.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Table repair was successfully"` on success, or an error message from the `manage` subprocess.
+</ResponseField>
+
+Returns HTTP `200` on success, HTTP `500` on failure.
+
+---
+
+## POST /export/table/\{connection\}/\{schema\}/\{table\}/reset
+
+Resets the incremental export watermark to zero by invoking `manage --resetIncrementalExport`. The next export run will re-export all rows from Hive.
+
+<Warning>
+  Resetting the incremental state forces a full re-export on the next scheduled run. This may result in duplicate rows in the target if idempotency is not handled at the target level.
+</Warning>
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+<ParamField path="connection" type="string" required>
+  JDBC connection alias.
+</ParamField>
+
+<ParamField path="schema" type="string" required>
+  Target schema name.
+</ParamField>
+
+<ParamField path="table" type="string" required>
+  Target table name.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="result" type="string">
+  `"Table reset was successfully"` on success, or an error message from the `manage` subprocess.
+</ResponseField>
+
+Returns HTTP `200` on success, HTTP `500` on failure.

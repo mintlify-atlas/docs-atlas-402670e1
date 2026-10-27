@@ -1,0 +1,167 @@
+---
+title: "export CLI: Run and Control Table Export Operations"
+sidebarTitle: "export"
+description: "Complete reference for the ./export command — run full or incremental exports from Hive to JDBC targets or AWS S3, with phase control and function-level debugging."
+---
+
+The `./export` command reads data from a Hive table and writes it to a configured external target — a relational database reachable by JDBC (Oracle, MSSQL, MySQL, DB2, PostgreSQL, Snowflake) or an AWS S3 bucket. It mirrors the phased, resumable architecture of `./import` and supports the same pattern of running a single named function for debugging or recovery.
+
+## Synopsis
+
+```bash
+./export -a <connection> -S <schema> -T <table> [OPTIONS]
+```
+
+All three of `-a`, `-S`, and `-T` are required. The command resolves the associated Hive source table and export configuration from the DBImport metadata database using these three parameters.
+
+## Flags Reference
+
+<ParamField path="-a" type="string" required>
+  The alias of the JDBC (or AWS S3) connection configured in DBImport. This is the `dbalias` value from the connection registry.
+</ParamField>
+
+<ParamField path="-S" type="string" required>
+  Target schema name on the destination system. For AWS S3 exports this is used as a path component.
+</ParamField>
+
+<ParamField path="-T" type="string" required>
+  Target table name on the destination system.
+</ParamField>
+
+<ParamField path="--ignoreTime" type="flag">
+  Override the configured start/stop time window for the JDBC connection and run the export regardless of the current time.
+</ParamField>
+
+<ParamField path="--resetStage" type="flag">
+  Force the export to restart from stage `0`, discarding any in-progress stage information. Use when a previous export is stuck and you want to start fresh.
+</ParamField>
+
+<ParamField path="-f | --function" type="string">
+  Execute a single named pipeline function and exit. Stage state is held in memory only — the on-disk stage is not modified. Intended for debugging and targeted recovery.
+
+  See [Runnable Functions](#runnable-functions) for valid values.
+
+  <Warning>
+    Using `-f` bypasses normal stage-checking logic. Running certain functions (such as `truncateJDBCTable`) out of order can result in data loss. Use with caution in production.
+  </Warning>
+</ParamField>
+
+<ParamField path="-v | --debug" type="flag">
+  Enable verbose debug logging to stdout. Passwords are printed in cleartext when this flag is active.
+</ParamField>
+
+<ParamField path="-V | --version" type="flag">
+  Print the DBImport version string and exit.
+</ParamField>
+
+---
+
+## Runnable Functions
+
+When `-f`/`--function` is supplied, only that function runs against the current export configuration:
+
+| Function | Description |
+|---|---|
+| `getHiveTableSchema` | Introspect the Hive source table's column definitions and data types. |
+| `createExportTempTable` | Create the intermediate Hive export staging table used to reformat data before the JDBC push. |
+| `truncateExportTempTable` | Truncate the Hive export staging table to prepare for a fresh load. |
+| `insertDataIntoExportTempTable` | Populate the Hive staging table from the source Hive table. |
+| `createTargetTable` | Create the target table on the destination JDBC system if it does not already exist; also handles schema updates via `updateTargetTable`. |
+| `truncateJDBCTable` | Truncate the destination table before a full export run. |
+| `exportData` | Execute the Sqoop or Spark job to push data from Hive (or the staging table) to the destination. |
+| `validate` | Compare row counts between the Hive source and JDBC target to verify export integrity. |
+| `createStatistics` | Compute and persist export-run statistics. |
+| `updateAtlas` | Push export lineage and metadata to Apache Atlas. |
+
+---
+
+## Export Phases
+
+DBImport exports are divided into sequential numbered stages. The export type (full or incremental) determines which stages are active.
+
+<CardGroup cols={2}>
+  <Card title="Full Export (EXPORT_PHASE_FULL)" icon="table-cells">
+    Truncates the destination table, optionally uses a Hive staging table to reformat data, then pushes all rows via Sqoop or Spark. Stages `100`–`999`.
+  </Card>
+  <Card title="Incremental Export (EXPORT_PHASE_INCR)" icon="arrow-up-right">
+    Reads only rows newer than the last exported incremental bookmark, inserts them into the destination without truncating existing rows. Saves the new bookmark on success. Stages `150`–`999`.
+  </Card>
+  <Card title="AWS S3 Full Export (EXPORT_PHASE_AWSS3_FULL)" icon="aws">
+    Variant of the full export that targets an S3 bucket path using Spark. Skips JDBC-specific steps such as `createTargetTable` and `truncateJDBCTable`. Stages `100`–`999`.
+  </Card>
+</CardGroup>
+
+<Note>
+  Stage `999` indicates a successfully completed export. Stage `0` means no export has run or the stage was explicitly reset.
+</Note>
+
+---
+
+## Export Staging Table
+
+For most export types, DBImport creates an intermediate Hive staging table before pushing data to the target. This staging table:
+
+- Converts data types to match the destination schema
+- Applies any configured column transformations
+- Decouples the Hive read from the JDBC write, preventing long Hive locks
+
+When the destination supports direct Spark writes (e.g. AWS S3), the staging table step may be skipped.
+
+---
+
+## Usage Examples
+
+```bash
+# Run a full export
+./export -a oracle_prod -S DW -T CUSTOMER_FACT
+
+# Run an incremental export
+./export -a mssql_dwh -S dbo -T ORDERS_INCR
+
+# Run outside the configured time window
+./export -a oracle_prod -S DW -T CUSTOMER_FACT --ignoreTime
+
+# Restart a stuck export from the beginning
+./export -a oracle_prod -S DW -T CUSTOMER_FACT --resetStage
+
+# Re-fetch the Hive schema without running the export
+./export -a oracle_prod -S DW -T CUSTOMER_FACT -f getHiveTableSchema
+
+# Re-run only the data push step
+./export -a oracle_prod -S DW -T CUSTOMER_FACT -f exportData
+
+# Validate row counts between Hive and the target
+./export -a oracle_prod -S DW -T CUSTOMER_FACT -f validate
+
+# Push updated lineage to Atlas
+./export -a oracle_prod -S DW -T CUSTOMER_FACT -f updateAtlas
+
+# Enable verbose debug logging (passwords visible in output)
+./export -a oracle_prod -S DW -T CUSTOMER_FACT -v
+```
+
+---
+
+## Recovery Scenarios
+
+<AccordionGroup>
+  <Accordion title="Export failed during the Sqoop/Spark push">
+    DBImport saves the retry attempt and will automatically recover to a safe restart point on the next run. Simply re-run with the same flags. For a hard reset, add `--resetStage`.
+  </Accordion>
+
+  <Accordion title="Destination table is out of sync">
+    If the target table schema has diverged, run `-f createTargetTable` to re-apply schema updates without re-exporting data.
+  </Accordion>
+
+  <Accordion title="Incremental export bookmark is incorrect">
+    Use `./manage --repairIncrementalExport` to re-read the current max value from the target table and reset the export bookmark.
+  </Accordion>
+
+  <Accordion title="Staging table contains stale data">
+    Run `-f truncateExportTempTable` to clear the staging table, then `-f insertDataIntoExportTempTable` to repopulate before retrying `-f exportData`.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  For incremental exports, `--resetStage` only resets the pipeline stage — it does not reset the incremental bookmark. To reset the bookmark and force a full re-export, use `./manage --resetIncrementalExport`.
+</Tip>
