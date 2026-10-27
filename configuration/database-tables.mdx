@@ -1,7 +1,7 @@
 ---
-title: "DBImport Configuration Database Tables Reference"
+title: "DBImport MySQL Configuration Database Tables Reference"
 sidebarTitle: "Database Tables"
-description: "Detailed reference for every DBImport MySQL configuration table covering Airflow DAGs, import and export definitions, instances, ETL jobs, statistics, and Atlas caches."
+description: "Detailed reference for every DBImport MySQL configuration table: Airflow DAGs, import and export definitions, ETL jobs, statistics, and Atlas caches."
 ---
 
 DBImport stores all operational configuration in a MySQL database. Because the web administration UI is not yet available, every configuration change must be made directly in these tables using a MySQL client such as [HeidiSQL](https://www.heidisql.com/). This page describes the purpose and key columns of each table.
@@ -27,6 +27,7 @@ Defines Airflow DAGs that orchestrate import operations. Each row describes one 
 | `dag_name` | Unique name of the Airflow DAG |
 | `schedule_interval` | Cron expression or preset (e.g. `@daily`) controlling when the DAG runs |
 | `filter_hive` | Semicolon-separated list of `HIVE_DB.HIVE_TABLE` patterns. Wildcards (`*`) are supported. Example: `dwh.orders;dwh.customers*` |
+| `use_python_dbimport` | Legacy column — always set to `1`. Has no functional effect in current versions |
 | `finish_all_stage1_first` | `1` = complete all import-phase (stage 1) tasks before any ETL-phase (stage 2) task starts |
 | `run_import_and_etl_separate` | `1` = run the import phase and ETL phase as separate Airflow tasks |
 | `retries` | Default retry count for all tasks in the DAG |
@@ -66,6 +67,7 @@ Defines Airflow DAGs that orchestrate export operations. Structure mirrors `airf
 | `filter_dbalias` | Filter pattern matched against the `dbalias` column in `export_tables`. Wildcards supported |
 | `filter_target_schema` | Filter pattern matched against `target_schema` in `export_tables` |
 | `filter_target_table` | Filter pattern matched against `target_table` in `export_tables` |
+| `use_python_dbimport` | Legacy column — always set to `1`. Has no functional effect in current versions |
 | `trigger_dag_on_success` | Comma-separated list of DAG names to trigger if this export DAG completes successfully |
 | `retries` | Retry count for tasks in this DAG |
 | `auto_regenerate_dag` | `1` = regenerate the DAG file automatically |
@@ -247,7 +249,8 @@ The primary configuration table for all import operations. Each row defines one 
 | `sqoop_sql_where_addition` | SQL fragment appended after `WHERE` in the Sqoop/Spark query |
 | `soft_delete_during_merge` | `1` = mark deleted rows as deleted instead of physically removing them during merge |
 | `force_string` | `1` = convert all character columns to Hive `STRING` |
-| `copy_slave` | `1` = this table participates in the cross-cluster copy phase |
+| `copy_slave` | `1` = this table participates in the cross-cluster copy phase (default `0`) |
+| `copy_finished` | Timestamp of the last successful cross-cluster copy for this table — **do not change manually** |
 
 </Accordion>
 

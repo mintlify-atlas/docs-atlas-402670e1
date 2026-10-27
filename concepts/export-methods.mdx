@@ -40,7 +40,7 @@ A full export reads the entire Hive source table, optionally stages the data thr
 
 **When to use it:** Any time you want the target database table to be a complete, current copy of the Hive table. This is the standard export method for most use cases.
 
-### Stage Flow (100–109)
+### Stage Flow (100–111)
 
 | Stage | Name | Description |
 |---|---|---|
@@ -50,13 +50,15 @@ A full export reads the entire Hive source table, optionally stages the data thr
 | 103 | Create Export Temp table | Creates the Temporary Export Table in Hive if one is required |
 | 104 | Truncate Export Temp table | Clears the Temporary Export Table before loading |
 | 105 | Insert data into Export Temp table | Loads data from the Hive source table into the Temporary Export Table |
-| 106 | Create Target table | Creates or updates the target table in the destination database to match the current Hive schema |
+| 106 | Create Target table | Creates the target table in the destination database to match the current Hive schema. If stage 108 (Update Target table) fails, the next run restarts from stage 106 |
 | 107 | Truncate Target table | Clears all existing rows from the target database table |
-| 108 | Sqoop Export | Executes the Sqoop export job. If this fails, the next run restarts from stage 106 |
-| 109 | Validations | Compares the row count in the Hive table against the row count in the target database table |
+| 108 | Update Target table | Updates the target table schema if it has changed since the last export |
+| 109 | Sqoop Export | Executes the Sqoop export job. If this fails, the next run restarts from stage 100 |
+| 110 | Spark Export | Executes the Spark export job (used instead of stage 109 when Spark is the export tool) |
+| 111 | Validations | Compares the row count in the Hive table against the row count in the target database table. If validation fails, the next run restarts from stage 100 |
 
 <Note>
-  Steps 103–105 (Temporary Export Table) are only executed when required by the connection type or configuration. For many full exports, the data is exported directly from the Hive source table.
+  Steps 103–105 (Temporary Export Table) are only executed when required by the connection type or configuration. For many full exports, the data is exported directly from the Hive source table. Either stage 109 (Sqoop) or stage 110 (Spark) runs depending on the configured export tool — not both.
 </Note>
 
   </Tab>
@@ -74,7 +76,7 @@ An incremental export tracks the minimum and maximum values of an incremental co
   Incremental exports always require a **Temporary Export Table**. This table is created, truncated, and loaded on every run as part of the export pipeline.
 </Warning>
 
-### Stage Flow (150–160)
+### Stage Flow (150–162)
 
 | Stage | Name | Description |
 |---|---|---|
@@ -84,11 +86,13 @@ An incremental export tracks the minimum and maximum values of an incremental co
 | 153 | Create Export Temp table | Creates the Temporary Export Table in Hive |
 | 154 | Truncate Export Temp table | Clears the Temporary Export Table before loading |
 | 155 | Fetch max value from Hive | Reads the current maximum value of the incremental column from Hive; this defines the upper bound of the delta to export |
-| 156 | Insert data into Export Temp table | Loads rows into the Temporary Export Table using the min and max incremental values as bounds |
-| 157 | Create Target table | Creates or updates the target table in the destination database |
-| 158 | Sqoop Export | Executes the Sqoop export job. If this fails, the next run restarts from stage 106 |
-| 159 | Validations | Compares row counts between the Hive Temporary Export Table and the target database table |
-| 160 | Save pending incremental values | Saves the min and max values from this run so the next export starts from the record after the current max |
+| 156 | Insert data into Export Temp table | Loads rows into the Temporary Export Table using the min and max incremental values as bounds. If this fails, the next run restarts from stage 154 |
+| 157 | Create Target table | Creates the target table in the destination database |
+| 158 | Update Target table | Updates the target table schema if it has changed since the last export |
+| 159 | Sqoop Export | Executes the Sqoop export job |
+| 160 | Spark Export | Executes the Spark export job (used instead of stage 159 when Spark is the export tool) |
+| 161 | Validations | Compares row counts between the Hive Temporary Export Table and the target database table. If validation fails, the next run restarts from stage 150 |
+| 162 | Save pending incremental values | Saves the min and max values from this run so the next export starts from the record after the current max |
 
   </Tab>
 </Tabs>

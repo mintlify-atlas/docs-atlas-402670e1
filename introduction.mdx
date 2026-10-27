@@ -1,7 +1,7 @@
 ---
 title: "DBImport: Automated ELT Ingestion for Hadoop and Hive"
 sidebarTitle: "Introduction"
-description: "DBImport is an ELT tool that automates schema-aware data ingestion from relational databases into Hadoop and Hive data lakehouses."
+description: "DBImport automates ELT ingestion from JDBC databases into Hadoop and Hive, handling schema drift, row-count validation, and Airflow DAG scheduling."
 ---
 
 DBImport is an open-source ELT ingestion platform that automatically loads data from JDBC-connected relational databases into a data lakehouse such as Cloudera Data Platform (CDP), AWS Lake Formation, or any Hadoop-compatible environment. It eliminates the toil of hand-crafting Sqoop scripts and manually tracking schema changes by centralising all import and export definitions in a MySQL configuration database and executing them as individually scheduled micro-batches through Apache Airflow.
@@ -43,16 +43,13 @@ DBImport connects to any database that exposes a JDBC driver. The following sour
 
 | Source System | Notes |
 |---|---|
-| Oracle | Full and incremental imports; Change Data Tracking |
-| Microsoft SQL Server | Full and incremental imports; Change Data Tracking |
+| Oracle | Full and incremental imports; Flashback Query for incremental |
+| Microsoft SQL Server | Full and incremental imports; Change Tracking support |
 | MySQL / MariaDB | Full and incremental imports |
 | IBM DB2 UDB | Full and incremental imports |
 | IBM DB2 AS/400 | Full and incremental imports |
 | PostgreSQL | Full and incremental imports |
-| Snowflake | Full and incremental imports |
-| MongoDB | Document-to-row flattening |
 | Progress / OpenEdge | Full and incremental imports |
-| AWS S3 | Object-store source and export target |
 
 ## Import Methods
 

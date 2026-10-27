@@ -1,5 +1,5 @@
 ---
-title: "Install and Configure DBImport on Your Cluster"
+title: "How to Install and Configure DBImport on Your Cluster"
 sidebarTitle: "Installation"
 description: "Unpack DBImport, configure dbimport.cfg, generate SSL keys, initialise the config schema, and enable Spark and Iceberg support on your cluster."
 ---
@@ -26,7 +26,7 @@ Installing DBImport involves unpacking the distribution tarball, installing Pyth
 
   <Step title="Install Python Dependencies">
 
-    DBImport is verified with Python 3.6 and Python 3.8. Choose the requirements file that matches your Python version. Using a virtual environment is strongly recommended.
+    DBImport is verified with Python 3.8 and Python 3.9. Choose the requirements file that matches your Python version. Using a virtual environment is strongly recommended.
 
     <Tabs>
       <Tab title="Python 3.8 (Spark 3)">
@@ -36,11 +36,11 @@ Installing DBImport involves unpacking the distribution tarball, installing Pyth
         pip3.8 install -r bin/requirements_python38.txt
         ```
       </Tab>
-      <Tab title="Python 3.6 (Spark 2 or 3)">
-        Python 3.6 works with both Spark 2 and Spark 3. Install the pinned dependencies with:
+      <Tab title="Python 3.9 (Spark 3)">
+        Python 3.9 also requires Spark 3. Install the pinned dependencies with:
 
         ```bash
-        pip3.6 install -r bin/requirements_python36.txt
+        pip3.9 install -r bin/requirements_python39.txt
         ```
       </Tab>
     </Tabs>

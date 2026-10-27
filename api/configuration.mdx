@@ -1,7 +1,7 @@
 ---
-title: "REST API: Global Configuration Endpoints"
+title: "DBImport REST API: Global Configuration and JDBC Endpoints"
 sidebarTitle: "Config"
-description: "Reference for the /config REST API endpoints — retrieve and update global DBImport configuration keys and JDBC driver registrations."
+description: "Reference for the /config REST API endpoints — retrieve and update global DBImport configuration keys and manage JDBC driver registrations."
 ---
 
 The configuration endpoints expose the global key/value settings stored in the DBImport configuration database. These keys control every subsystem — Airflow integration, HDFS paths, Hive behaviour, import/export session limits, Kafka event streaming, REST server settings, and more. JDBC driver registrations (classpath and driver class per database type) are managed separately via the JDBC driver endpoints. All endpoints require a valid Bearer token.

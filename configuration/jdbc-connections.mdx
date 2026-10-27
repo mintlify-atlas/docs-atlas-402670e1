@@ -1,7 +1,7 @@
 ---
 title: "Configuring JDBC Connections for Source and Target Databases"
 sidebarTitle: "JDBC Connections"
-description: "How to configure JDBC connection strings, encrypt credentials, set up AWS S3 exports, register JDBC drivers, and discover tables for import and export in DBImport."
+description: "How to configure JDBC connection strings, encrypt credentials, set up AWS S3 exports, register JDBC drivers, and discover tables for import and export."
 ---
 
 Every import and export in DBImport is associated with a named database connection called a **connection alias**. Aliases are stored in the `jdbc_connections` table and act as the single source of truth for how DBImport reaches a remote database — including the JDBC URL, encrypted credentials, Atlas metadata, and optional time-window restrictions. AWS S3 targets are also configured through this same table.
@@ -190,7 +190,7 @@ The IAM user or role must have all seven of the following S3 permissions on the 
   <Card title="s3:ListBucket" icon="folder-open">
     List objects within a bucket
   </Card>
-  <Card title="s3:ListBucketMultipartUploads" icon="arrows-spin">
+  <Card title="s3:ListBucketMultipartUpload" icon="arrows-spin">
     List multipart uploads in progress
   </Card>
 </CardGroup>

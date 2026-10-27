@@ -1,7 +1,7 @@
 ---
-title: "manage CLI: Admin and Maintenance Operations Reference"
+title: "manage CLI: Admin and Maintenance Operations"
 sidebarTitle: "manage"
-description: "Full reference for the ./manage command — encrypt credentials, discover tables, repair incremental state, generate Airflow DAGs, and run ad-hoc JDBC or Hive queries."
+description: "Reference for the ./manage command — encrypt credentials, discover tables, repair incremental state, generate Airflow DAGs, and execute ad-hoc queries."
 ---
 
 The `./manage` command is the central administration and maintenance tool for DBImport. It does not move production data — instead it manages the metadata, configuration, and operational state that the `./import` and `./export` commands depend on. Use it to onboard new tables, repair stuck pipelines, encrypt secrets, and control Airflow DAG generation.
@@ -296,6 +296,9 @@ These operations fix incremental imports that have fallen out of sync with the s
     </ParamField>
     <ParamField path="-w | --airflowWriteDAG" type="flag">
       Write the generated DAG files directly to the configured Airflow DAGs directory. Without this flag, files are written to the temp folder only.
+    </ParamField>
+    <ParamField path="--airflowDAGFolder" type="string">
+      Override the output directory for generated DAG files. Useful when writing to a non-default Airflow DAGs folder. Takes effect only when combined with `--airflowWriteDAG`.
     </ParamField>
 
     ```bash

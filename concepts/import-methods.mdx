@@ -19,6 +19,7 @@ Choosing the right import method is one of the most important configuration deci
 | Full Merge | `full` | `merge` | No | No | Sqoop or Spark |
 | Full Merge + History Audit | `full` | `merge_history_audit` | Yes (via full scan) | Yes | Sqoop or Spark |
 | None (staging only) | `full` | `none` | No | No | Sqoop or Spark |
+| External (staging only) | `full` | `external` | No | No | Sqoop or Spark |
 | Incremental Insert | `incr` | `insert` | No | No | Sqoop or Spark |
 | Incremental Merge | `incr` | `merge` | No | No | Sqoop or Spark |
 | Incremental Merge + History | `incr` | `merge_history_audit` | No | Yes | Sqoop or Spark |
@@ -180,6 +181,29 @@ Reads the full source table and creates the Import table in Hive, then stops. No
 | 1010–1049 | Source/Sqoop stages (same as Truncate & Insert) |
 | 3450 | Connecting to Hive |
 | 3451 | Create Import table |
+| 3452 | Get Import table rowcount |
+| 3453 | Validate Import table *(pipeline ends here)* |
+
+</Accordion>
+
+<Accordion title="External (Staging Only) — full + external">
+
+Reads the full source table and creates the Import table in Hive as an external table, then stops. Unlike `none`, DBImport sets the Import table path to the same location as the Target table, making the raw ingested data directly accessible at the target path without a separate ETL copy step.
+
+| Setting | Value |
+|---|---|
+| Import Phase | `full` |
+| ETL Phase | `external` |
+
+**When to use it:** When a downstream process needs to access the raw imported data via Hive at the target path directly, without a separate ETL transformation into a distinct Target table.
+
+**Stage flow:**
+
+| Stage | Name |
+|---|---|
+| 1010–1049 | Source/Sqoop stages (same as Truncate & Insert) |
+| 3450 | Connecting to Hive |
+| 3451 | Create external Import table |
 | 3452 | Get Import table rowcount |
 | 3453 | Validate Import table *(pipeline ends here)* |
 
@@ -440,10 +464,12 @@ Same as MSSQL Change Tracking Merge but also writes all new, changed, and delete
 | 3653 | Validate Import table |
 | 3654 | Remove Hive locks |
 | 3655 | Create Target table |
-| 3657 | Merge Import table with Target table |
-| 3658 | Update Hive statistics |
-| 3659 | Get Target table rowcount |
-| 3660 | Validate Target table |
-| 3661 | Save pending incremental values |
+| 3656 | Create History table |
+| 3657 | Create Delete table |
+| 3658 | Merge Import table with Target table |
+| 3659 | Update Hive statistics |
+| 3660 | Get Target table rowcount |
+| 3661 | Validate Target table |
+| 3662 | Save pending incremental values |
 
 </Accordion>

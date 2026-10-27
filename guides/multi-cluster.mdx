@@ -1,7 +1,7 @@
 ---
 title: "Replicating Imports Across Multiple Hadoop Clusters"
 sidebarTitle: "Multi-Cluster"
-description: "Sync imported data to multiple Hadoop clusters with DBImport's distcp-based copy — without doubling the load on source databases."
+description: "Sync imported data to multiple Hadoop clusters with DBImport's distcp-based copy — without doubling the load on source databases at import time."
 ---
 
 Many organisations run more than one Hadoop environment — for example, a production cluster and a disaster-recovery cluster, or separate clusters for different business units. The naive solution is to run the same import independently on every cluster, but that multiplies the read load on the source database proportionally to the number of clusters. DBImport's multi-cluster import feature solves this: data is read from the source system exactly once, and DBImport handles distributing the HDFS data to every destination cluster automatically.
@@ -112,18 +112,18 @@ This also sets `copy_slave = 1` for every copied table on the remote instance. A
 For history tables, incremental tables, or any other standalone Hive table that needs to be available on both clusters, use the export-and-copy workflow:
 
 <Steps>
-  <Step title="Export and copy the table">
-    Run on the **source** cluster. Exports the Hive table to HDFS and copies it to the remote location.
+  <Step title="Export the table to HDFS">
+    Run on the **source** cluster. Exports the Hive table to a local HDFS path. Requires `--hiveDB`, `--hiveTable`, and `--localHDFSpath`.
 
     ```bash
-    ./copy --exportAndCopyTable
+    ./copy --exportTable --hiveDB=<DB> --hiveTable=<TABLE> --localHDFSpath=<HDFS PATH>
     ```
   </Step>
-  <Step title="Import the copied table">
-    Run on the **target** cluster. Reads the copied HDFS data and ingests it into Hive.
+  <Step title="Import the table from HDFS">
+    Run on the **target** cluster. Reads the previously exported HDFS data and ingests it into Hive. Requires `--hiveDB`, `--hiveTable`, and `--localHDFSpath`.
 
     ```bash
-    ./copy --importCopiedTable
+    ./copy --importTable --hiveDB=<DB> --hiveTable=<TABLE> --localHDFSpath=<HDFS PATH>
     ```
   </Step>
 </Steps>

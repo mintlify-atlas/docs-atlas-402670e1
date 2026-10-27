@@ -1,7 +1,7 @@
 ---
-title: "REST API: Airflow DAG Management Endpoints"
+title: "DBImport REST API: Airflow DAG Management Endpoints"
 sidebarTitle: "Airflow DAGs"
-description: "Full reference for all /airflow REST API endpoints — list DAGs, generate DAG files, and full CRUD for import, export, and custom Airflow DAG definitions."
+description: "Full reference for all /airflow REST API endpoints — list DAGs, generate DAG files, and full CRUD for import, export, and custom DAG definitions."
 ---
 
 The Airflow endpoints manage the DAG definitions stored in the DBImport configuration database and the generation of actual Airflow DAG Python files on disk. DBImport supports three DAG types: **import** (orchestrates import jobs filtered by Hive table), **export** (orchestrates export jobs filtered by connection/schema/table), and **custom** (arbitrary task graphs). All endpoints require a valid Bearer token.
@@ -106,6 +106,10 @@ Returns a summary list of all import DAG definitions.
 
 <ResponseField name="slaWarningTime" type="string">
   SLA warning threshold (e.g. `01:00:00`).
+</ResponseField>
+
+<ResponseField name="operatorNotes" type="string">
+  Internal notes for operators.
 </ResponseField>
 
 <ResponseField name="concurrency" type="integer">
@@ -272,6 +276,9 @@ All fields from the list endpoint plus:
     <ResponseField name="taskConfig" type="string">Task-specific configuration string.</ResponseField>
     <ResponseField name="sensorPokeInterval" type="integer">Poll interval in seconds (sensor tasks only).</ResponseField>
     <ResponseField name="sensorTimeoutMinutes" type="integer">Timeout in minutes (sensor tasks only).</ResponseField>
+    <ResponseField name="sensorConnection" type="string">Connection alias used by the sensor task to check an external dependency.</ResponseField>
+    <ResponseField name="sensorSoftFail" type="integer">Whether the sensor task soft-fails instead of hard-failing on timeout: `0` = hard fail, `1` = soft fail.</ResponseField>
+    <ResponseField name="sudoUser" type="string">Linux user account to sudo to when running this task (overrides the DAG-level `sudoUser`).</ResponseField>
   </Expandable>
 </ResponseField>
 
@@ -492,7 +499,7 @@ The following fields are common to the detail view of all three DAG types:
 </ResponseField>
 
 <ResponseField name="retryExponentialBackoff" type="integer">
-  Whether retries use exponential backoff: `0` = off, `1` = on.
+  Whether retries use exponential backoff: `0` = off, `1` = on. For import DAGs the model accepts a boolean; for export and custom DAGs it is an integer.
 </ResponseField>
 
 <ResponseField name="concurrency" type="integer">

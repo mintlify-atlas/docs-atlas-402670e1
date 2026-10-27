@@ -27,6 +27,14 @@ The REST server is a standalone process separate from the main DBImport daemon. 
 ./restServer status
 ```
 
+Each action accepts the following options:
+
+| Option | Short | Description |
+|---|---|---|
+| `--help` | `-h` | Print usage information and exit |
+| `--debug` | `-v` | Enable verbose debug-level logging |
+| `--version` | `-V` | Print the DBImport version and exit |
+
 <Note>
   `./mainServer` manages the main DBImport processing daemon, not the REST server. Use `./restServer` exclusively for the API process.
 </Note>

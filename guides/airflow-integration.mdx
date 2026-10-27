@@ -142,6 +142,9 @@ For tasks placed `in main`, the `task_dependency_in_main` column accepts a comma
     | `sensor_poke_interval` | Seconds between poll attempts. Defaults to 5 minutes. |
     | `sensor_timeout_minutes` | Minutes before the sensor times out. Defaults to 4 hours. |
   </Tab>
+  <Tab title="DBImport Command">
+    Runs any DBImport binary command directly as a task. The command name (relative to the DBImport `bin/` directory) is stored in `task_config`. DBImport automatically prepends the correct binary path and handles `sudo` if configured. Useful for running custom `manage` or `copy` operations as part of a DAG.
+  </Tab>
 </Tabs>
 
 ### Common Task Configuration Columns

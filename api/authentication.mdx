@@ -125,7 +125,7 @@ The `restserver_authentication_method` configuration key controls how DBImport v
 DBImport automatically creates the admin user defined by `restserver_admin_user` the first time the REST server starts, if that user does not already exist. The initial password is set to `admin`.
 
 <Warning>
-  Change the admin password immediately after your first login. Use `POST /users/{user}/changePassword` or the `POST /config/updateConfig` endpoint. Leaving the default `admin` password in place is a security risk.
+  Change the admin password immediately after your first login. Use `POST /users/{user}/changePassword` to set a strong password. Leaving the default `admin` password in place is a security risk.
 </Warning>
 
 The admin user has elevated privileges:

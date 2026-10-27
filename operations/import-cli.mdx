@@ -1,7 +1,7 @@
 ---
-title: "import CLI: Run and Control Table Import Operations"
+title: "import CLI: Run and Control Table Imports"
 sidebarTitle: "import"
-description: "Complete reference for the ./import command — run full, incremental, or phased imports and invoke individual pipeline functions for debugging or recovery."
+description: "Reference for the ./import command — run full, incremental, or phased Hive imports and invoke individual pipeline functions for debugging or recovery."
 ---
 
 The `./import` command is the primary entry point for loading data from a configured source database into Hive. A single invocation can run the entire pipeline — Import Phase, Copy Phase, and ETL Phase — or any individual phase or function in isolation, making it equally suited to scheduled production runs and targeted debugging.
@@ -41,7 +41,23 @@ Both `-h`/`-d`/`--Hive_DB` and `-t`/`--Hive_Table` are required for every invoca
 </ParamField>
 
 <ParamField path="--skipImportData" type="flag">
-  Skip the Sqoop/Spark data transfer step. Useful when raw import files are already present on HDFS and only the Hive table structure needs to be recreated.
+  Skip the Sqoop/Spark data transfer step. Useful when raw import files are already present on HDFS and only the Hive table structure needs to be recreated. `--skipSqoop` is accepted as an equivalent alias.
+</ParamField>
+
+<ParamField path="--skipHiveTest" type="flag">
+  Skip the Hive connectivity test that normally runs before ETL Phase operations. Useful in environments where the Hive test produces false negatives.
+</ParamField>
+
+<ParamField path="--ignoreDisabled" type="flag">
+  Bypass the `import_start_disable` global configuration flag and run the import even when imports have been globally disabled. Used by Airflow DAGs and targeted recovery runs.
+</ParamField>
+
+<ParamField path="--incrementalMax" type="string">
+  Override the upper bound value for the incremental column when running an incremental import. Forces the import to stop at the specified value rather than the current maximum in the source table.
+</ParamField>
+
+<ParamField path="--logWithTimestamp" type="flag">
+  Prefix every log line with a timestamp (`YYYY-MM-DD HH:MM:SS`). Useful when output is captured to a file or forwarded to a log aggregation system.
 </ParamField>
 
 <ParamField path="--dropTargetTable" type="flag">
@@ -202,7 +218,7 @@ Understanding the three phases helps you choose the right flags for partial runs
   </Accordion>
 
   <Accordion title="Import disabled by configuration">
-    If the `import_start_disable` configuration key is set, imports will fail with an error. Use `--ignoreDisabled` (internal/Airflow flag) to bypass this check, or re-enable imports via the DBImport configuration.
+    If the `import_start_disable` configuration key is set, imports will fail with an error. Use `--ignoreDisabled` to bypass this check for a specific run, or re-enable imports globally via the DBImport configuration.
   </Accordion>
 </AccordionGroup>
 

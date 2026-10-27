@@ -1,7 +1,7 @@
 ---
-title: "REST API: Import Table Configuration Endpoints"
+title: "DBImport REST API: Import Table Configuration Endpoints"
 sidebarTitle: "Imports"
-description: "Complete reference for all /import REST API endpoints — list databases, discover tables, search, bulk update/delete, and manage individual import table definitions."
+description: "Full reference for /import REST API endpoints — list databases, discover tables, search, bulk update/delete, and manage import table definitions."
 ---
 
 The import endpoints control every aspect of table ingestion configuration in DBImport. An import table definition maps a source JDBC table (identified by connection, schema, and table name) to a Hive/datalake target database and table, along with all ingestion settings: phase types, incremental mode, validation, Sqoop/Spark tuning, and column-level overrides. All endpoints require a valid Bearer token.
@@ -280,7 +280,7 @@ An array of primary key objects:
 
 ## GET /import/table/\{connection\}
 
-Returns a list of all import tables associated with a given JDBC connection alias.
+Returns a list of all import tables associated with a given JDBC connection alias. The source code also registers `GET /import/table/{database}` (listing tables by Hive target database) at this same path pattern; because FastAPI evaluates route declarations in registration order, the `{connection}` variant always matches first. To list tables filtered by Hive target database, use `POST /import/search` with the `database` filter field.
 
 **Authentication:** Bearer token required
 
@@ -339,24 +339,6 @@ Returns a list of all import tables associated with a given JDBC connection alia
 <ResponseField name="operatorNotes" type="string">
   Free-text operator notes.
 </ResponseField>
-
----
-
-## GET /import/table/\{database\}
-
-Returns a list of all import tables configured within a specific Hive/datalake target database.
-
-**Authentication:** Bearer token required
-
-### Path Parameters
-
-<ParamField path="database" type="string" required>
-  Hive target database name.
-</ParamField>
-
-### Response Fields
-
-Same fields as `GET /import/table/{connection}`.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
-title: "export CLI: Run and Control Table Export Operations"
+title: "export CLI: Run and Control Table Exports"
 sidebarTitle: "export"
-description: "Complete reference for the ./export command — run full or incremental exports from Hive to JDBC targets or AWS S3, with phase control and function-level debugging."
+description: "Reference for the ./export command — run full or incremental Hive exports to JDBC targets or AWS S3, with phase control and function-level debugging."
 ---
 
 The `./export` command reads data from a Hive table and writes it to a configured external target — a relational database reachable by JDBC (Oracle, MSSQL, MySQL, DB2, PostgreSQL, Snowflake) or an AWS S3 bucket. It mirrors the phased, resumable architecture of `./import` and supports the same pattern of running a single named function for debugging or recovery.
@@ -50,7 +50,7 @@ All three of `-a`, `-S`, and `-T` are required. The command resolves the associa
   Enable verbose debug logging to stdout. Passwords are printed in cleartext when this flag is active.
 </ParamField>
 
-<ParamField path="-V | --version" type="flag">
+<ParamField path="--version" type="flag">
   Print the DBImport version string and exit.
 </ParamField>
 

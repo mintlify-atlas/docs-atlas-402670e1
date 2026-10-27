@@ -1,7 +1,7 @@
 ---
-title: "DBImport Global Configuration Settings Reference"
+title: "DBImport Global Configuration Settings Full Reference"
 sidebarTitle: "Global Settings"
-description: "Complete reference for DBImport's conf/dbimport.cfg file and the configuration table keys covering Airflow, HDFS, import, export, Hive, Kafka, and REST settings."
+description: "Complete reference for DBImport's conf/dbimport.cfg file and the configuration table keys, covering Airflow, HDFS, import, export, Hive, Kafka, and REST."
 ---
 
 DBImport is configured through two complementary layers: the `conf/dbimport.cfg` file read at process startup, and the `configuration` table in MySQL which stores runtime operational settings. Most day-to-day tuning happens in the database table, while the config file holds connection credentials and infrastructure paths that must be available before the database is reachable.
@@ -111,6 +111,9 @@ The sections below document every supported key grouped by functional area.
 | `airflow_dummy_task_queue` | `valueStr` | Airflow queue assigned to dummy/internal tasks such as `stop` and `stage_one_complete` |
 | `airflow_url` | `valueStr` | Base URL of the Airflow web server, used for hyperlinks in log output |
 | `airflow_default_pool_size` | `valueInt` | Default Airflow pool size when DBImport creates a pool automatically |
+| `airflow_create_pool_with_task` | `valueInt` | `1` = automatically create an Airflow pool when a task is added to a DAG |
+| `airflow_aws_instanceids` | `valueStr` | Comma-separated list of AWS EC2 instance IDs used for dynamic Airflow worker scaling |
+| `airflow_aws_pool_to_instanceid` | `valueInt` | `1` = map Airflow pool names to AWS EC2 instance IDs for worker routing |
 | `post_airflow_dag_operations` | `valueInt` | `1` = send DAG start/stop events to Kafka and/or REST endpoints |
 
 </Accordion>
@@ -138,17 +141,30 @@ The sections below document every supported key grouped by functional area.
 | Key | Column | Description |
 |---|---|---|
 | `import_staging_database` | `valueStr` | Hive database name used as the landing zone during imports |
+| `import_staging_table` | `valueStr` | Hive table name used as the landing table during imports |
 | `import_history_database` | `valueStr` | Hive database where import history tables are stored |
+| `import_history_table` | `valueStr` | Hive table name used to store import history records |
 | `import_work_database` | `valueStr` | Hive database used for intermediate work tables during imports |
+| `import_work_table` | `valueStr` | Hive table name used for intermediate work during imports |
 | `import_default_sessions` | `valueInt` | Default number of parallel sessions (mappers/executors) for tables with no prior run history |
 | `import_max_sessions` | `valueInt` | Hard upper limit on parallel sessions used for any single import |
 | `sqoop_import_default_mappers` | `valueInt` | Default Sqoop mapper count for tables that have never been imported before |
 | `sqoop_import_max_mappers` | `valueInt` | Maximum number of Sqoop mappers allowed during an import |
 | `spark_import_default_executors` | `valueInt` | Default Spark executor count for tables with no prior run history |
 | `spark_import_max_executors` | `valueInt` | Maximum number of Spark executors allowed during an import |
+| `spark_max_executors` | `valueInt` | Global maximum Spark executor count that applies across all operations |
 | `import_start_disable` | `valueInt` | `1` = prevent new import tasks from starting; running tasks complete normally |
 | `import_stage_disable` | `valueInt` | `1` = prevent new tasks from starting and halt running imports after the current stage |
 | `import_process_empty` | `valueInt` | `1` = run full import processing even for source tables that return zero rows |
+| `import_columnname_delete` | `valueStr` | Name of the soft-delete flag column added to merge-history tables |
+| `import_columnname_histtime` | `valueStr` | Name of the history timestamp column added to merge-history tables |
+| `import_columnname_import` | `valueStr` | Name of the import timestamp column added to target tables |
+| `import_columnname_insert` | `valueStr` | Name of the insert timestamp column added to merge tables |
+| `import_columnname_iud` | `valueStr` | Name of the insert/update/delete marker column added to merge tables |
+| `import_columnname_source` | `valueStr` | Name of the source system marker column added to target tables |
+| `import_columnname_update` | `valueStr` | Name of the update timestamp column added to merge tables |
+| `impala_invalidate_metadata` | `valueInt` | `1` = run `INVALIDATE METADATA` in Impala after each import completes |
+| `timestamp_with_timezone` | `valueInt` | `1` = store timestamp columns with timezone information |
 
 </Accordion>
 
@@ -204,10 +220,11 @@ The sections below document every supported key grouped by functional area.
 | `rest_timeout` | `valueInt` | Timeout in seconds for REST calls |
 | `rest_verifyssl` | `valueInt` | `1` = verify the REST server's SSL certificate |
 | `rest_trustcafile` | `valueStr` | Path to a CA bundle file used to verify the REST server certificate |
-| `restserver_authentication_method` | `valueStr` | Authentication method used by the built-in REST server (e.g. `local` or `pam`) |
+| `restserver_authentication_method` | `valueStr` | Authentication method used by the built-in REST server (`local` or `pam`) |
 | `restserver_token_ttl` | `valueInt` | Lifetime in minutes of REST server authentication tokens |
 | `restserver_admin_user` | `valueStr` | Username of the default administrator account for the REST server |
 | `post_data_to_awssns` | `valueInt` | `1` = post completion events to an AWS SNS topic |
+| `post_data_to_awssns_extended` | `valueInt` | `1` = include extended statistics in AWS SNS messages |
 | `post_data_to_awssns_topic` | `valueStr` | ARN of the AWS SNS topic that receives completion events |
 
 </Accordion>

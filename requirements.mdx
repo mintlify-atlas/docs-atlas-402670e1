@@ -1,5 +1,5 @@
 ---
-title: "DBImport System Requirements and Prerequisites"
+title: "DBImport System Requirements and Python Prerequisites"
 sidebarTitle: "Requirements"
 description: "Python version, Hive transport mode, Kerberos, MySQL config database, Hive Metastore access, and full Python package dependency list for DBImport."
 ---
@@ -8,10 +8,10 @@ DBImport has a specific set of prerequisites on both the server where it is inst
 
 ## Python
 
-DBImport is verified with **Python 3.6** and **Python 3.8**. Other versions may work but are not tested. The Python version you choose also constrains the Spark version available to you.
+DBImport is verified with **Python 3.8** and **Python 3.9**. Other versions may work but are not tested. The Python version you choose also constrains the Spark version available to you.
 
 <Note>
-  Python 3.8 requires Spark 3. Running Python 3.8 with Spark 2 will cause errors during the ETL and Hive processing steps.
+  Python 3.8 and 3.9 require Spark 3. Running either version with Spark 2 will cause errors during the ETL and Hive processing steps.
 </Note>
 
 It is strongly recommended to run DBImport inside a Python virtual environment to isolate its dependencies from other tools installed on the same host.
@@ -53,8 +53,7 @@ Configure the connection string in `dbimport.cfg` under `[Metastore]` → `hive_
 | Engine | Supported versions |
 |---|---|
 | Sqoop | Sqoop 1.x (on HDP or CDH/CDP) |
-| Spark 2 | Works with Python 3.6 |
-| Spark 3 | Required for Python 3.8; available as a separate parcel on CDP |
+| Spark 3 | Required for Python 3.8 and 3.9; available as a separate parcel on CDP |
 
 Sqoop cannot export data from Hive 3.x transactional tables. If your cluster runs Hive 3.x, you must use Spark for all exports.
 
@@ -68,10 +67,10 @@ DBImport itself is a lightweight coordinator process — it issues SQL and spawn
 
 ## Python Package Requirements
 
-The table below lists every Python package pinned in `requirements_python38.txt`. Install these with `pip3.8 install -r requirements_python38.txt` from the DBImport installation directory.
+The table below lists every Python package pinned in `bin/requirements_python38.txt`. Install these with `pip3.8 install -r bin/requirements_python38.txt` from the DBImport installation directory.
 
 <Note>
-  A separate `requirements_python36.txt` is provided for Python 3.6 environments. The package list is nearly identical; the main differences are in version pins for packages that dropped Python 3.6 support.
+  A separate `requirements_python39.txt` is provided for Python 3.9 environments. Install it with `pip3.9 install -r bin/requirements_python39.txt`.
 </Note>
 
 | Package | Version (Python 3.8) |
@@ -135,8 +134,8 @@ The table below lists every Python package pinned in `requirements_python38.txt`
 ## Summary Checklist
 
 <CardGroup cols={2}>
-  <Card title="Python 3.6 or 3.8" icon="python">
-    Python 3.8 requires Spark 3. A virtual environment is strongly recommended.
+  <Card title="Python 3.8 or 3.9" icon="python">
+    Both versions require Spark 3. A virtual environment is strongly recommended.
   </Card>
   <Card title="Kerberos enabled cluster" icon="key">
     Valid keytab file and principal required. Non-Kerberos deployments are not supported.
